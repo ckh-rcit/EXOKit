@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "EXOKit (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "EXOKit (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}

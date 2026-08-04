@@ -1,0 +1,412 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+
+namespace EXOKit.Services
+{
+    public enum PermissionTargetType
+    {
+        Mailbox,
+        Resource
+    }
+
+    public enum PermissionOperationType
+    {
+        Add,
+        Remove
+    }
+
+    public class PermissionSelections
+    {
+        public bool FullAccess { get; set; }
+        public bool SendAs { get; set; }
+        public bool SendOnBehalf { get; set; }
+    }
+
+    /// <summary>
+    /// Result for a single (User, Target) permission processing pass, keyed the same way as the
+    /// script's $results[$user][$targetIdentity] list of status strings (e.g. "Full Access (Added)",
+    /// "Send As (Already Exists)", "Send on Behalf (Pending Validation)").
+    /// </summary>
+    public class PermissionResult
+    {
+        public string User { get; set; } = string.Empty;
+        public string Target { get; set; } = string.Empty;
+        public List<string> Statuses { get; } = new();
+    }
+
+    /// <summary>
+    /// Ports Invoke-PermissionOperation (and its Add/Remove-MailboxPermissions / Add/Remove-ResourcePermissions
+    /// wrappers) from the toolkit script: for each target mailbox/resource and each user, adds or
+    /// removes Full Access, Send As, and Send on Behalf permissions, batching Send on Behalf changes
+    /// into a single Set-Mailbox call per target, then polls once per second for up to 10 seconds to
+    /// verify the change actually applied before reporting final status.
+    /// </summary>
+    public class MailboxPermissionService
+    {
+        private readonly ExoPowerShellService _exo;
+
+        public MailboxPermissionService(ExoPowerShellService exo)
+        {
+            _exo = exo;
+        }
+
+        public async Task<List<PermissionResult>> InvokePermissionOperationAsync(
+            PermissionOperationType operationType,
+            PermissionTargetType targetType,
+            IEnumerable<string> targets,
+            IEnumerable<string> users,
+            PermissionSelections permissions)
+        {
+            var targetList = targets.ToList();
+            var userList = users.ToList();
+            var resultMap = new Dictionary<string, Dictionary<string, List<string>>>(StringComparer.OrdinalIgnoreCase);
+
+            var actionVerb = operationType == PermissionOperationType.Add ? "Assignment" : "Removal";
+            Logger.Log($"--- Starting {targetType} Permission {actionVerb} ---");
+
+            foreach (var targetIdentity in targetList)
+            {
+                Logger.Log($"Processing {targetType}: {targetIdentity}");
+
+                var mailboxExists = await _exo.MailboxExistsAsync(targetIdentity, resourceOnly: targetType == PermissionTargetType.Resource);
+                if (!mailboxExists)
+                {
+                    Logger.Log($"{targetType} '{targetIdentity}' not found. Skipping.", LogType.Error);
+                    continue;
+                }
+
+                var sendOnBehalfList = new List<string>();
+                var userObjectMap = new Dictionary<string, RecipientInfo>(StringComparer.OrdinalIgnoreCase);
+                var validationQueue = new List<(string User, string Permission)>();
+
+                foreach (var user in userList)
+                {
+                    Logger.Log($"Processing User: {user} for {targetType}: {targetIdentity}");
+
+                    var userObject = await _exo.GetRecipientAsync(user);
+                    if (!GetOrCreateResultList(resultMap, user, targetIdentity, out var statuses))
+                    {
+                        // just created; continue
+                    }
+
+                    if (userObject == null)
+                    {
+                        Logger.Log($"User '{user}' not found. Skipping.", LogType.Error);
+                        statuses.Add("User Not Found");
+                        continue;
+                    }
+                    userObjectMap[user] = userObject;
+
+                    if (permissions.FullAccess)
+                    {
+                        await ProcessFullAccessAsync(operationType, targetIdentity, user, userObject, statuses, validationQueue);
+                    }
+
+                    if (permissions.SendAs)
+                    {
+                        await ProcessSendAsAsync(operationType, targetIdentity, user, statuses, validationQueue);
+                    }
+
+                    if (permissions.SendOnBehalf)
+                    {
+                        ProcessSendOnBehalfMark(operationType, user, sendOnBehalfList, statuses);
+                    }
+                }
+
+                if (sendOnBehalfList.Count > 0)
+                {
+                    await ApplySendOnBehalfBatchAsync(operationType, targetIdentity, sendOnBehalfList, resultMap, validationQueue);
+                }
+
+                if (validationQueue.Count > 0)
+                {
+                    await ValidatePendingChangesAsync(operationType, targetIdentity, validationQueue, userObjectMap, resultMap);
+                }
+            }
+
+            return resultMap.SelectMany(userEntry => userEntry.Value.Select(targetEntry => new PermissionResult
+            {
+                User = userEntry.Key,
+                Target = targetEntry.Key,
+                Statuses = { }
+            }.Also(r => r.Statuses.AddRange(targetEntry.Value)))).ToList();
+        }
+
+        private static bool GetOrCreateResultList(Dictionary<string, Dictionary<string, List<string>>> resultMap, string user, string target, out List<string> statuses)
+        {
+            var created = false;
+            if (!resultMap.TryGetValue(user, out var targetMap))
+            {
+                targetMap = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+                resultMap[user] = targetMap;
+            }
+            if (!targetMap.TryGetValue(target, out var list))
+            {
+                list = new List<string>();
+                targetMap[target] = list;
+                created = true;
+            }
+            statuses = list;
+            return created;
+        }
+
+        private async Task ProcessFullAccessAsync(
+            PermissionOperationType operationType, string targetIdentity, string user, RecipientInfo userObject,
+            List<string> statuses, List<(string User, string Permission)> validationQueue)
+        {
+            Logger.Log($"Attempting {operationType} Full Access...");
+            try
+            {
+                var hasFullAccess = await _exo.HasFullAccessAsync(targetIdentity, user, userObject);
+
+                if (operationType == PermissionOperationType.Add)
+                {
+                    if (hasFullAccess)
+                    {
+                        Logger.Log("Already granted Full Access.", LogType.Warning);
+                        statuses.Add("Full Access (Already Exists)");
+                    }
+                    else
+                    {
+                        await _exo.AddFullAccessAsync(targetIdentity, user);
+                        Logger.Log("Full Access add command submitted. Pending validation.");
+                        statuses.Add("Full Access (Pending Validation)");
+                        validationQueue.Add((user, "Full Access"));
+                    }
+                }
+                else
+                {
+                    await _exo.RemoveFullAccessAsync(targetIdentity, user);
+                    Logger.Log("Full Access remove command submitted. Pending validation.");
+                    statuses.Add("Full Access (Pending Validation)");
+                    validationQueue.Add((user, "Full Access"));
+                }
+            }
+            catch (Exception ex)
+            {
+                if (operationType == PermissionOperationType.Remove && IsNotFoundError(ex.Message))
+                {
+                    Logger.Log("Full Access not found.", LogType.Warning);
+                    statuses.Add("Full Access (Not Found)");
+                }
+                else
+                {
+                    Logger.Log($"Failed to {operationType} Full Access. DETAILS: {ex.Message}", LogType.Error);
+                    statuses.Add("Full Access (Error)");
+                }
+            }
+        }
+
+        private async Task ProcessSendAsAsync(
+            PermissionOperationType operationType, string targetIdentity, string user,
+            List<string> statuses, List<(string User, string Permission)> validationQueue)
+        {
+            Logger.Log($"Attempting {operationType} Send As...");
+            try
+            {
+                var existing = await _exo.HasSendAsAsync(targetIdentity, user);
+
+                if (operationType == PermissionOperationType.Add)
+                {
+                    if (existing)
+                    {
+                        Logger.Log("Already granted Send As.", LogType.Warning);
+                        statuses.Add("Send As (Already Exists)");
+                    }
+                    else
+                    {
+                        await _exo.AddSendAsAsync(targetIdentity, user);
+                        Logger.Log("Send As add command submitted. Pending validation.");
+                        statuses.Add("Send As (Pending Validation)");
+                        validationQueue.Add((user, "Send As"));
+                    }
+                }
+                else
+                {
+                    if (existing)
+                    {
+                        await _exo.RemoveSendAsAsync(targetIdentity, user);
+                        Logger.Log("Send As remove command submitted. Pending validation.");
+                        statuses.Add("Send As (Pending Validation)");
+                        validationQueue.Add((user, "Send As"));
+                    }
+                    else
+                    {
+                        Logger.Log("Send As not found.", LogType.Warning);
+                        statuses.Add("Send As (Not Found)");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                if (ex.Message.Contains("wasn't found on object", StringComparison.OrdinalIgnoreCase))
+                {
+                    Logger.Log("Send As not found (confirmed by remove).", LogType.Warning);
+                    statuses.Add("Send As (Not Found)");
+                }
+                else
+                {
+                    Logger.Log($"Failed to {operationType} Send As. DETAILS: {ex.Message}", LogType.Error);
+                    statuses.Add("Send As (Error)");
+                }
+            }
+        }
+
+        private static void ProcessSendOnBehalfMark(
+            PermissionOperationType operationType, string user, List<string> sendOnBehalfList, List<string> statuses)
+        {
+            if (operationType == PermissionOperationType.Add)
+            {
+                Logger.Log("Checking Send on Behalf...");
+                // Existence check happens in ApplySendOnBehalfBatchAsync's caller via HasSendOnBehalfAsync
+                // is intentionally deferred here to keep the batching identical to the script, so we just mark.
+                if (!sendOnBehalfList.Contains(user, StringComparer.OrdinalIgnoreCase))
+                {
+                    sendOnBehalfList.Add(user);
+                }
+                statuses.Add("Send on Behalf (Pending)");
+            }
+            else
+            {
+                Logger.Log($"Marking '{user}' for Remove Send on Behalf.");
+                if (!sendOnBehalfList.Contains(user, StringComparer.OrdinalIgnoreCase))
+                {
+                    sendOnBehalfList.Add(user);
+                }
+                statuses.Add("Send on Behalf (Pending Removal)");
+            }
+        }
+
+        private async Task ApplySendOnBehalfBatchAsync(
+            PermissionOperationType operationType, string targetIdentity, List<string> sendOnBehalfList,
+            Dictionary<string, Dictionary<string, List<string>>> resultMap,
+            List<(string User, string Permission)> validationQueue)
+        {
+            var usersStr = string.Join(", ", sendOnBehalfList);
+            Logger.Log($"Applying Send on Behalf {operationType} for '{targetIdentity}' (Users: {usersStr})...");
+
+            try
+            {
+                if (operationType == PermissionOperationType.Add)
+                {
+                    await _exo.AddSendOnBehalfBatchAsync(targetIdentity, sendOnBehalfList.ToArray());
+                }
+                else
+                {
+                    await _exo.RemoveSendOnBehalfBatchAsync(targetIdentity, sendOnBehalfList.ToArray());
+                }
+
+                Logger.Log("Send on Behalf command submitted. Pending validation.");
+
+                foreach (var processedUser in sendOnBehalfList)
+                {
+                    if (resultMap.TryGetValue(processedUser, out var targetMap) && targetMap.TryGetValue(targetIdentity, out var statuses))
+                    {
+                        validationQueue.Add((processedUser, "Send on Behalf"));
+                        ReplaceStatus(statuses, operationType == PermissionOperationType.Add ? "Send on Behalf (Pending)" : "Send on Behalf (Pending Removal)", "Send on Behalf (Pending Validation)");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Log($"Failed Send on Behalf {operationType} for '{targetIdentity}'. DETAILS: {ex.Message}", LogType.Error);
+                foreach (var failedUser in sendOnBehalfList)
+                {
+                    if (resultMap.TryGetValue(failedUser, out var targetMap) && targetMap.TryGetValue(targetIdentity, out var statuses))
+                    {
+                        ReplaceStatus(statuses, operationType == PermissionOperationType.Add ? "Send on Behalf (Pending)" : "Send on Behalf (Pending Removal)", "Send on Behalf (Error)");
+                    }
+                }
+            }
+        }
+
+        private async Task ValidatePendingChangesAsync(
+            PermissionOperationType operationType, string targetIdentity,
+            List<(string User, string Permission)> validationQueue,
+            Dictionary<string, RecipientInfo> userObjectMap,
+            Dictionary<string, Dictionary<string, List<string>>> resultMap)
+        {
+            Logger.Log($"Validating applied permission changes for '{targetIdentity}' once per second for up to 10 seconds...");
+            var pending = new List<(string User, string Permission)>(validationQueue);
+
+            for (var attempt = 1; attempt <= 10 && pending.Count > 0; attempt++)
+            {
+                await Task.Delay(1000);
+                var remaining = new List<(string User, string Permission)>();
+
+                foreach (var item in pending)
+                {
+                    if (!resultMap.TryGetValue(item.User, out var targetMap) || !targetMap.TryGetValue(targetIdentity, out var statuses))
+                    {
+                        continue;
+                    }
+
+                    bool isPresent = item.Permission switch
+                    {
+                        "Full Access" => await _exo.HasFullAccessAsync(targetIdentity, item.User, userObjectMap.GetValueOrDefault(item.User) ?? new RecipientInfo()),
+                        "Send As" => await _exo.HasSendAsAsync(targetIdentity, item.User),
+                        "Send on Behalf" => userObjectMap.TryGetValue(item.User, out var uo) && await _exo.HasSendOnBehalfAsync(targetIdentity, uo),
+                        _ => false
+                    };
+
+                    var isValidated = operationType == PermissionOperationType.Add ? isPresent : !isPresent;
+                    if (isValidated)
+                    {
+                        var verb = operationType == PermissionOperationType.Add ? "added" : "removed";
+                        var suffix = operationType == PermissionOperationType.Add ? "Added" : "Removed";
+                        Logger.Log($"SUCCESS: {item.Permission} {verb} and verified for '{item.User}'.", LogType.Success);
+                        ReplaceStatus(statuses, $"{item.Permission} (Pending Validation)", $"{item.Permission} ({suffix})");
+                    }
+                    else
+                    {
+                        remaining.Add(item);
+                    }
+                }
+
+                pending = remaining;
+            }
+
+            foreach (var item in pending)
+            {
+                if (!resultMap.TryGetValue(item.User, out var targetMap) || !targetMap.TryGetValue(targetIdentity, out var statuses))
+                {
+                    continue;
+                }
+
+                var opWord = operationType == PermissionOperationType.Add ? "add" : "remove";
+                var stillOrNo = operationType == PermissionOperationType.Add ? "verification found no matching permission" : "permission still present";
+                Logger.Log($"WARNING: {item.Permission} {opWord} command succeeded but {stillOrNo} for '{item.User}' within 10 seconds.", LogType.Warning);
+                var suffix = operationType == PermissionOperationType.Add ? "Add - Verify Failed" : "Remove - Verify Failed";
+                ReplaceStatus(statuses, $"{item.Permission} (Pending Validation)", $"{item.Permission} ({suffix})");
+            }
+        }
+
+        private static void ReplaceStatus(List<string> statuses, string oldValue, string newValue)
+        {
+            for (var i = 0; i < statuses.Count; i++)
+            {
+                if (string.Equals(statuses[i], oldValue, StringComparison.OrdinalIgnoreCase))
+                {
+                    statuses[i] = newValue;
+                }
+            }
+        }
+
+        private static bool IsNotFoundError(string message) =>
+            message.Contains("doesn't exist", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("wasn't found", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("Cannot find", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("ACE", StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static class FluentExtensions
+    {
+        public static T Also<T>(this T self, Action<T> action)
+        {
+            action(self);
+            return self;
+        }
+    }
+}

@@ -1,0 +1,16 @@
+## .NET / Visual Studio
+bin/
+obj/
+publish/
+*.user
+.vs/
+
+## Generated MSIX/publish artifacts
+AppPackages/
+BundleArtifacts/
+*.msix
+*.msixbundle
+*.appxsym
+
+## Local secrets/config (org-specific - see config.sample.json)
+config.json

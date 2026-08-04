@@ -1,0 +1,49 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Restore dependencies
+        run: dotnet restore "EXOKit.csproj"
+
+      - name: Create config.json from sample
+        shell: pwsh
+        run: Copy-Item "config.sample.json" "config.json"
+
+      - name: Publish self-contained single-file exe
+        run: dotnet publish "EXOKit.csproj" -c Release -r win-x64 -p:Platform=x64 --self-contained true -p:WindowsPackageType=None -p:PublishSingleFile=true -o "publish/win-x64"
+
+      - name: Remove debug symbols
+        shell: pwsh
+        run: Remove-Item "publish/win-x64/EXOKit.pdb" -ErrorAction SilentlyContinue
+
+      - name: Package release archive
+        shell: pwsh
+        run: |
+          $v = "${{ github.ref_name }}"
+          Compress-Archive -Path "publish/win-x64/*" -DestinationPath "EXOKit-$v-win-x64.zip"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            EXOKit-*.zip
+            publish/win-x64/EXOKit.exe
+          generate_release_notes: true

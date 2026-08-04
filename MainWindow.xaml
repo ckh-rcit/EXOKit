@@ -1,0 +1,482 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="EXOKit.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:EXOKit"
+    xmlns:services="using:EXOKit.Services"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    Title="EXOKit">
+
+    <Window.SystemBackdrop>
+        <MicaBackdrop />
+    </Window.SystemBackdrop>
+
+    <Grid Padding="12" RequestedTheme="Dark">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition x:Name="OutputRow" Height="220" />
+        </Grid.RowDefinitions>
+
+        <!-- Connection status bar -->
+        <Border Grid.Row="0" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="4" Padding="12" Margin="0,0,0,8">
+            <StackPanel Orientation="Horizontal" Spacing="12">
+                <Button x:Name="ButtonConnectExo" Content="Connect Exchange Online" Click="ButtonConnectExo_Click" />
+                <Button x:Name="ButtonConnectGraph" Content="Connect Microsoft Graph" Click="ButtonConnectGraph_Click" IsEnabled="False" />
+                <Button x:Name="ButtonDisconnect" Content="Disconnect All" Click="ButtonDisconnect_Click" />
+                <TextBlock x:Name="TextBlockConnectionStatus" Text="Not connected." VerticalAlignment="Center" />
+            </StackPanel>
+        </Border>
+
+        <!-- Sidebar navigation + section content -->
+        <NavigationView Grid.Row="1" x:Name="MainNavigationView"
+                        PaneDisplayMode="Left" IsBackButtonVisible="Collapsed" IsSettingsVisible="False"
+                        IsTitleBarAutoPaddingEnabled="False" SelectionChanged="MainNavigationView_SelectionChanged"
+                        PaneOpening="MainNavigationView_PaneOpening" PaneClosing="MainNavigationView_PaneClosing">
+            <NavigationView.MenuItems>
+                <NavigationViewItem x:Name="NavItemMailboxes" Content="Mailboxes" Tag="Mailboxes" IsSelected="True" />
+                <NavigationViewItem x:Name="NavItemCreateMailbox" Content="Create Mailbox" Tag="CreateMailbox" />
+                <NavigationViewItem x:Name="NavItemResources" Content="Resources" Tag="Resources" />
+                <NavigationViewItem x:Name="NavItemGroups" Content="Groups" Tag="Groups" />
+                <NavigationViewItem x:Name="NavItemCreateGroup" Content="Create Group" Tag="CreateGroup" />
+                <NavigationViewItem x:Name="NavItemGroupSettings" Content="Group Settings" Tag="GroupSettings" />
+                <NavigationViewItem x:Name="NavItemBookings" Content="Bookings" Tag="Bookings" />
+                <NavigationViewItem x:Name="NavItemRecipientLookup" Content="Recipient Lookup" Tag="RecipientLookup" />
+                <NavigationViewItem x:Name="NavItemReporting" Content="Reporting" Tag="Reporting" />
+                <NavigationViewItem x:Name="NavItemSettings" Content="Settings" Tag="Settings" />
+            </NavigationView.MenuItems>
+
+            <Grid>
+                <!-- Mailboxes -->
+                <ScrollViewer x:Name="PanelMailboxes" Visibility="Visible">
+                    <StackPanel Spacing="8" Padding="8">
+                        <TextBlock Text="Mailbox(es) (one per line, or comma/semicolon separated)" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBox x:Name="TextBoxSharedMailboxes" AcceptsReturn="True" Height="80" Width="420" TextWrapping="Wrap" />
+                            <Button Content="Browse..." Click="ButtonBrowseSharedMailboxes_Click" VerticalAlignment="Top" />
+                        </StackPanel>
+                        <TextBlock Text="Users" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBox x:Name="TextBoxMailboxUsers" AcceptsReturn="True" Height="80" Width="420" TextWrapping="Wrap" />
+                            <Button Content="Browse..." Click="ButtonBrowseMailboxUsers_Click" VerticalAlignment="Top" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="16">
+                            <CheckBox x:Name="CheckBoxFullAccess" Content="Full Access" />
+                            <CheckBox x:Name="CheckBoxSendAs" Content="Send As" />
+                            <CheckBox x:Name="CheckBoxSendOnBehalf" Content="Send on Behalf" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button x:Name="ButtonAddMailboxPermissions" Content="Add Permissions" Click="ButtonAddMailboxPermissions_Click" />
+                            <Button x:Name="ButtonRemoveMailboxPermissions" Content="Remove Permissions" Click="ButtonRemoveMailboxPermissions_Click" />
+                            <Button x:Name="ButtonValidateMailboxes" Content="Validate Input" Click="ButtonValidateMailboxes_Click" />
+                        </StackPanel>
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- Create Mailbox -->
+                <ScrollViewer x:Name="PanelCreateMailbox" Visibility="Collapsed">
+                    <StackPanel Spacing="8" Padding="8">
+                        <TextBlock Text="Create New Shared Mailbox" FontWeight="SemiBold" FontSize="16" />
+
+                        <TextBlock Text="Display Name" />
+                        <TextBox x:Name="TextBoxNewMbDisplayName" Width="420" HorizontalAlignment="Left" />
+
+                        <TextBlock Text="Email Address" />
+                        <StackPanel Orientation="Horizontal" Spacing="4">
+                            <TextBox x:Name="TextBoxNewMbAlias" Width="200" />
+                            <TextBlock Text="@" VerticalAlignment="Center" />
+                            <ComboBox x:Name="ComboBoxNewMbDomain" Width="216" PlaceholderText="Select domain..." />
+                            <Button x:Name="ButtonRefreshDomains" Content="Refresh" Click="ButtonRefreshDomains_Click" VerticalAlignment="Stretch" />
+                        </StackPanel>
+
+                        <TextBlock Text="Department (optional)" />
+                        <TextBox x:Name="TextBoxNewMbDepartment" Width="420" HorizontalAlignment="Left" />
+
+                        <StackPanel Orientation="Horizontal" Spacing="16">
+                            <CheckBox x:Name="CheckBoxNewMbArchive" Content="Enable Archive Mailbox" />
+                            <CheckBox x:Name="CheckBoxNewMbHideFromGal" Content="Hide From Address Lists" />
+                        </StackPanel>
+
+                        <TextBlock Text="Delivery Restrictions (optional)" FontWeight="SemiBold" />
+                        <CheckBox x:Name="CheckBoxNewMbRequireAuth" Content="Require Sender Authentication (reject external senders by default)" />
+                        <TextBlock Text="Accept Messages Only From (blank = accept all)" />
+                        <TextBox x:Name="TextBoxNewMbAcceptedSenders" AcceptsReturn="True" Height="60" Width="420" TextWrapping="Wrap" HorizontalAlignment="Left" />
+                        <TextBlock Text="Reject Messages From" />
+                        <TextBox x:Name="TextBoxNewMbBlockedSenders" AcceptsReturn="True" Height="60" Width="420" TextWrapping="Wrap" HorizontalAlignment="Left" />
+
+                        <TextBlock Text="Initial Delegation (optional)" FontWeight="SemiBold" />
+                        <TextBlock Text="Full Access" />
+                        <TextBox x:Name="TextBoxNewMbFullAccess" AcceptsReturn="True" Height="60" Width="420" TextWrapping="Wrap" HorizontalAlignment="Left" />
+                        <TextBlock Text="Send As" />
+                        <TextBox x:Name="TextBoxNewMbSendAs" AcceptsReturn="True" Height="60" Width="420" TextWrapping="Wrap" HorizontalAlignment="Left" />
+                        <TextBlock Text="Send on Behalf" />
+                        <TextBox x:Name="TextBoxNewMbSendOnBehalf" AcceptsReturn="True" Height="60" Width="420" TextWrapping="Wrap" HorizontalAlignment="Left" />
+
+                        <Button x:Name="ButtonCreateSharedMailbox" Content="Create Shared Mailbox" Click="ButtonCreateSharedMailbox_Click" />
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- Resources -->
+                <ScrollViewer x:Name="PanelResources" Visibility="Collapsed">
+                    <StackPanel Spacing="8" Padding="8">
+                        <TextBlock Text="Resource Mailboxes (Room/Equipment)" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBox x:Name="TextBoxResourceMailboxes" AcceptsReturn="True" Height="80" Width="420" TextWrapping="Wrap" />
+                            <Button Content="Browse..." Click="ButtonBrowseResourceMailboxes_Click" VerticalAlignment="Top" />
+                        </StackPanel>
+                        <TextBlock Text="Users" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBox x:Name="TextBoxResourceUsers" AcceptsReturn="True" Height="80" Width="420" TextWrapping="Wrap" />
+                            <Button Content="Browse..." Click="ButtonBrowseResourceUsers_Click" VerticalAlignment="Top" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="16">
+                            <CheckBox x:Name="CheckBoxResourceFullAccess" Content="Full Access" />
+                            <CheckBox x:Name="CheckBoxResourceSendAs" Content="Send As" />
+                            <CheckBox x:Name="CheckBoxResourceSendOnBehalf" Content="Send on Behalf" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button x:Name="ButtonAddResourcePermissions" Content="Add Permissions" Click="ButtonAddResourcePermissions_Click" />
+                            <Button x:Name="ButtonRemoveResourcePermissions" Content="Remove Permissions" Click="ButtonRemoveResourcePermissions_Click" />
+                            <Button x:Name="ButtonValidateResources" Content="Validate Input" Click="ButtonValidateResources_Click" />
+                        </StackPanel>
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- Groups -->
+                <ScrollViewer x:Name="PanelGroups" Visibility="Collapsed">
+                    <StackPanel Spacing="8" Padding="8">
+                        <TextBlock Text="Distribution Groups / M365 Groups" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBox x:Name="TextBoxGroups" AcceptsReturn="True" Height="80" Width="420" TextWrapping="Wrap" />
+                            <Button Content="Browse..." Click="ButtonBrowseGroups_Click" VerticalAlignment="Top" />
+                        </StackPanel>
+                        <TextBlock Text="Users" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBox x:Name="TextBoxGroupUsers" AcceptsReturn="True" Height="80" Width="420" TextWrapping="Wrap" />
+                            <Button Content="Browse..." Click="ButtonBrowseGroupUsers_Click" VerticalAlignment="Top" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="16">
+                            <CheckBox x:Name="CheckBoxMember" Content="Member" />
+                            <CheckBox x:Name="CheckBoxOwner" Content="Owner" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button x:Name="ButtonAddMembership" Content="Add Role" Click="ButtonAddMembership_Click" />
+                            <Button x:Name="ButtonRemoveMembership" Content="Remove Role" Click="ButtonRemoveMembership_Click" />
+                        </StackPanel>
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- Create Group -->
+                <ScrollViewer x:Name="PanelCreateGroup" Visibility="Collapsed">
+                    <StackPanel Spacing="8" Padding="8">
+                        <TextBlock Text="Create New Group" FontWeight="SemiBold" FontSize="16" />
+
+                        <TextBlock Text="Group Type" />
+                        <StackPanel Orientation="Horizontal" Spacing="16">
+                            <RadioButton x:Name="RadioNewGroupM365" Content="Microsoft 365 Group" GroupName="NewGroupType" IsChecked="True" Checked="RadioNewGroupType_Checked" />
+                            <RadioButton x:Name="RadioNewGroupDistribution" Content="Distribution Group" GroupName="NewGroupType" Checked="RadioNewGroupType_Checked" />
+                            <RadioButton x:Name="RadioNewGroupSecurity" Content="Mail-Enabled Security Group" GroupName="NewGroupType" Checked="RadioNewGroupType_Checked" />
+                        </StackPanel>
+
+                        <TextBlock Text="Display Name" />
+                        <TextBox x:Name="TextBoxNewGroupDisplayName" Width="420" HorizontalAlignment="Left" />
+
+                        <TextBlock Text="Email Address" />
+                        <StackPanel Orientation="Horizontal" Spacing="4">
+                            <TextBox x:Name="TextBoxNewGroupAlias" Width="200" />
+                            <TextBlock Text="@" VerticalAlignment="Center" />
+                            <ComboBox x:Name="ComboBoxNewGroupDomain" Width="216" PlaceholderText="Select domain..." />
+                            <Button x:Name="ButtonRefreshGroupDomains" Content="Refresh" Click="ButtonRefreshGroupDomains_Click" VerticalAlignment="Stretch" />
+                        </StackPanel>
+
+                        <TextBlock x:Name="TextBlockNewGroupPrivacyLabel" Text="Privacy (Microsoft 365 Groups only)" />
+                        <StackPanel x:Name="PanelNewGroupPrivacy" Orientation="Horizontal" Spacing="16">
+                            <RadioButton x:Name="RadioNewGroupPublic" Content="Public" GroupName="NewGroupPrivacy" IsChecked="True" />
+                            <RadioButton x:Name="RadioNewGroupPrivate" Content="Private" GroupName="NewGroupPrivacy" />
+                        </StackPanel>
+
+                        <StackPanel x:Name="PanelNewGroupTeams" Spacing="4">
+                            <TextBlock Text="Add Microsoft Teams to your group" FontWeight="SemiBold" />
+                            <CheckBox x:Name="CheckBoxNewGroupCreateTeam" Content="Create a team for this group" />
+                        </StackPanel>
+
+                        <StackPanel x:Name="PanelNewGroupCommunication" Spacing="4">
+                            <TextBlock Text="Communication" FontWeight="SemiBold" />
+                            <CheckBox x:Name="CheckBoxNewGroupAllowExternalSenders" Content="Allow people outside of my organization to send email to this group" />
+                        </StackPanel>
+
+                        <StackPanel x:Name="PanelNewGroupJoinLeave" Spacing="8">
+                            <TextBlock Text="Joining the group" FontWeight="SemiBold" />
+                            <StackPanel Spacing="4">
+                                <RadioButton x:Name="RadioNewGroupJoinOpen" GroupName="NewGroupJoin" IsChecked="True" Content="Open (Anyone can join this group without owner approval)" />
+                                <RadioButton x:Name="RadioNewGroupJoinClosed" GroupName="NewGroupJoin" Content="Closed (Only group owners can add members. All requests to join will be automatically declined)" />
+                                <RadioButton x:Name="RadioNewGroupJoinApproval" GroupName="NewGroupJoin" Content="Owner approval (Anyone can request to join this group and owners must approve the request)" />
+                            </StackPanel>
+                            <TextBlock Text="Leaving the group" FontWeight="SemiBold" />
+                            <StackPanel Spacing="4">
+                                <RadioButton x:Name="RadioNewGroupLeaveOpen" GroupName="NewGroupLeave" IsChecked="True" Content="Open (Anyone can leave this group without group owner approval)" />
+                                <RadioButton x:Name="RadioNewGroupLeaveClosed" GroupName="NewGroupLeave" Content="Closed (Only group owners can remove members. All requests to leave will be automatically declined)" />
+                            </StackPanel>
+                        </StackPanel>
+
+                        <StackPanel x:Name="PanelNewGroupApproval" Spacing="4">
+                            <TextBlock Text="Approval" FontWeight="SemiBold" />
+                            <CheckBox x:Name="CheckBoxNewGroupRequireApproval" Content="Require owner approval to join the group" />
+                        </StackPanel>
+
+                        <TextBlock Text="Owner (required, at least one user)" />
+                        <TextBox x:Name="TextBoxNewGroupOwner" Width="420" HorizontalAlignment="Left" />
+
+                        <TextBlock Text="Initial Members (optional, one per line, or comma/semicolon separated)" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBox x:Name="TextBoxNewGroupMembers" AcceptsReturn="True" Height="80" Width="420" TextWrapping="Wrap" />
+                            <Button Content="Browse..." Click="ButtonBrowseNewGroupMembers_Click" VerticalAlignment="Top" />
+                        </StackPanel>
+
+                        <Button x:Name="ButtonCreateGroup" Content="Create Group" Click="ButtonCreateGroup_Click" />
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- Group Settings (Distribution Groups only) -->
+                <ScrollViewer x:Name="PanelGroupSettings" Visibility="Collapsed">
+                    <StackPanel Spacing="12" Padding="8">
+                        <TextBlock Text="Group Settings (Distribution Groups / Mail-Enabled Security Groups)" FontWeight="SemiBold" FontSize="16" />
+
+                        <TextBlock Text="Group Identity" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBox x:Name="TextBoxGroupSettingsIdentity" Width="420" HorizontalAlignment="Left" />
+                            <Button x:Name="ButtonLoadGroupSettings" Content="Load Settings" Click="ButtonLoadGroupSettings_Click" />
+                        </StackPanel>
+
+                        <!-- Delivery management -->
+                        <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="4" Padding="12">
+                            <StackPanel Spacing="6">
+                                <TextBlock Text="Delivery management" FontWeight="SemiBold" FontSize="14" />
+                                <TextBlock Text="Sender options" FontWeight="SemiBold" />
+                                <StackPanel Spacing="4">
+                                    <RadioButton x:Name="RadioDeliveryInternalOnly" GroupName="DeliverySenderOptions" IsChecked="True" Content="Only allow messages from people inside my organization" />
+                                    <RadioButton x:Name="RadioDeliveryInternalAndExternal" GroupName="DeliverySenderOptions" Content="Allow messages from people inside and outside my organization" />
+                                </StackPanel>
+                                <TextBlock Text="Specified senders (optional; restricts senders to only these users/groups)" />
+                                <TextBox x:Name="TextBoxDeliverySpecifiedSenders" AcceptsReturn="True" Height="60" Width="420" TextWrapping="Wrap" HorizontalAlignment="Left" />
+                                <Button x:Name="ButtonSaveDeliveryManagement" Content="Save Delivery Management" Click="ButtonSaveDeliveryManagement_Click" HorizontalAlignment="Left" />
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Manage delegates -->
+                        <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="4" Padding="12">
+                            <StackPanel Spacing="6">
+                                <TextBlock Text="Manage delegates" FontWeight="SemiBold" FontSize="14" />
+                                <TextBlock Text="Send As (one per line, or comma/semicolon separated)" />
+                                <TextBox x:Name="TextBoxDelegatesSendAs" AcceptsReturn="True" Height="60" Width="420" TextWrapping="Wrap" HorizontalAlignment="Left" />
+                                <TextBlock Text="Send on Behalf (one per line, or comma/semicolon separated)" />
+                                <TextBox x:Name="TextBoxDelegatesSendOnBehalf" AcceptsReturn="True" Height="60" Width="420" TextWrapping="Wrap" HorizontalAlignment="Left" />
+                                <Button x:Name="ButtonSaveDelegates" Content="Save Delegates" Click="ButtonSaveDelegates_Click" HorizontalAlignment="Left" />
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Message approval -->
+                        <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="4" Padding="12">
+                            <StackPanel Spacing="6">
+                                <TextBlock Text="Message approval" FontWeight="SemiBold" FontSize="14" />
+                                <CheckBox x:Name="CheckBoxRequireModeratorApproval" Content="Require moderator approval for messages sent to this group" />
+                                <TextBlock Text="Group moderators" />
+                                <TextBox x:Name="TextBoxModerators" AcceptsReturn="True" Height="60" Width="420" TextWrapping="Wrap" HorizontalAlignment="Left" />
+                                <TextBlock Text="Add senders who don't require message approval" />
+                                <TextBox x:Name="TextBoxBypassModerationSenders" AcceptsReturn="True" Height="60" Width="420" TextWrapping="Wrap" HorizontalAlignment="Left" />
+                                <TextBlock Text="Notify a sender if their message is not approved" FontWeight="SemiBold" />
+                                <StackPanel Spacing="4">
+                                    <RadioButton x:Name="RadioNotifyOnlySender" GroupName="NotifySenderMode" IsChecked="True" Content="Only sender" />
+                                    <RadioButton x:Name="RadioNotifyOnlyInternal" GroupName="NotifySenderMode" Content="Only senders in your organization" />
+                                    <RadioButton x:Name="RadioNotifyNever" GroupName="NotifySenderMode" Content="No notifications" />
+                                </StackPanel>
+                                <Button x:Name="ButtonSaveMessageApproval" Content="Save Message Approval" Click="ButtonSaveMessageApproval_Click" HorizontalAlignment="Left" />
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Membership approvals -->
+                        <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="4" Padding="12">
+                            <StackPanel Spacing="6">
+                                <TextBlock Text="Membership approvals" FontWeight="SemiBold" FontSize="14" />
+                                <TextBlock Text="Joining the group" FontWeight="SemiBold" />
+                                <StackPanel Spacing="4">
+                                    <RadioButton x:Name="RadioGroupSettingsJoinOpen" GroupName="GroupSettingsJoin" IsChecked="True" Content="Open (Anyone can join this group without owner approval)" />
+                                    <RadioButton x:Name="RadioGroupSettingsJoinClosed" GroupName="GroupSettingsJoin" Content="Closed (Only group owners can add members. All requests to join will be automatically declined)" />
+                                    <RadioButton x:Name="RadioGroupSettingsJoinApproval" GroupName="GroupSettingsJoin" Content="Owner approval (Anyone can request to join this group and owners must approve the request)" />
+                                </StackPanel>
+                                <TextBlock Text="Leaving the group" FontWeight="SemiBold" />
+                                <StackPanel Spacing="4">
+                                    <RadioButton x:Name="RadioGroupSettingsLeaveOpen" GroupName="GroupSettingsLeave" IsChecked="True" Content="Open (Anyone can leave this group without group owner approval)" />
+                                    <RadioButton x:Name="RadioGroupSettingsLeaveClosed" GroupName="GroupSettingsLeave" Content="Closed (Only group owners can remove members. All requests to leave will be automatically declined)" />
+                                </StackPanel>
+                                <Button x:Name="ButtonSaveMembershipApproval" Content="Save Membership Approvals" Click="ButtonSaveMembershipApproval_Click" HorizontalAlignment="Left" />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- Bookings -->
+                <ScrollViewer x:Name="PanelBookings" Visibility="Collapsed">
+                    <StackPanel Spacing="8" Padding="8">
+                        <TextBlock Text="Users to enable for Microsoft Bookings" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBox x:Name="TextBoxBookingsUsers" AcceptsReturn="True" Height="120" Width="420" TextWrapping="Wrap" />
+                            <Button Content="Browse..." Click="ButtonBrowseBookingsUsers_Click" VerticalAlignment="Top" />
+                        </StackPanel>
+                        <Button x:Name="ButtonEnableBookings" Content="Enable Bookings Access" Click="ButtonEnableBookings_Click" />
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- Recipient Lookup -->
+                <StackPanel x:Name="PanelRecipientLookup" Spacing="8" Padding="8" Visibility="Collapsed">
+                    <TextBlock Text="Recipient Identity" />
+                    <TextBox x:Name="TextBoxRecipientCheck" Width="320" HorizontalAlignment="Left" />
+                    <Button x:Name="ButtonCheckRecipient" Content="Check Recipient Type" Click="ButtonCheckRecipient_Click" />
+                    <TextBox x:Name="TextBoxRecipientCheckResult" IsReadOnly="True" Width="320" HorizontalAlignment="Left" />
+                </StackPanel>
+
+                <!-- Reporting -->
+                <Grid x:Name="PanelReporting" Visibility="Collapsed">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <StackPanel Grid.Row="0" Spacing="8" Padding="8">
+                        <TextBlock Text="Group / Distribution List / Mailbox Identity" />
+                        <TextBox x:Name="TextBoxReportingIdentity" Width="420" HorizontalAlignment="Left" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button x:Name="ButtonGenerateObjectReport" Content="Generate Membership/Permissions Report" Click="ButtonGenerateObjectReport_Click" />
+                            <Button x:Name="ButtonGetMailboxDelegates" Content="Get Mailbox Delegates" Click="ButtonGetMailboxDelegates_Click" />
+                            <Button x:Name="ButtonExportReportCsv" Content="Export to CSV..." Click="ButtonExportReportCsv_Click" IsEnabled="False" />
+                        </StackPanel>
+                    </StackPanel>
+                    <Border Grid.Row="1" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="4" Margin="8,0,8,8">
+                        <ListView x:Name="ListViewReportResults" SelectionMode="None">
+                            <ListView.HeaderTemplate>
+                                <DataTemplate>
+                                    <Grid Padding="8,4">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="2*" />
+                                            <ColumnDefinition Width="1*" />
+                                            <ColumnDefinition Width="2*" />
+                                            <ColumnDefinition Width="1.2*" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Object" FontWeight="SemiBold" />
+                                        <TextBlock Grid.Column="1" Text="Type" FontWeight="SemiBold" />
+                                        <TextBlock Grid.Column="2" Text="Member / Delegate" FontWeight="SemiBold" />
+                                        <TextBlock Grid.Column="3" Text="Role / Permission" FontWeight="SemiBold" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ListView.HeaderTemplate>
+                            <ListView.ItemTemplate>
+                                <DataTemplate x:DataType="services:ReportRow">
+                                    <Grid Padding="8,2">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="2*" />
+                                            <ColumnDefinition Width="1*" />
+                                            <ColumnDefinition Width="2*" />
+                                            <ColumnDefinition Width="1.2*" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="{x:Bind ObjectName}" />
+                                        <TextBlock Grid.Column="1" Text="{x:Bind ObjectType}" />
+                                        <TextBlock Grid.Column="2" Text="{x:Bind MemberOrDelegate}" />
+                                        <TextBlock Grid.Column="3" Text="{x:Bind RoleOrPermission}" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ListView.ItemTemplate>
+                        </ListView>
+                    </Border>
+                </Grid>
+
+                <!-- Settings -->
+                <ScrollViewer x:Name="PanelSettings" Visibility="Collapsed">
+                    <StackPanel Spacing="8" Padding="8" MaxWidth="560" HorizontalAlignment="Left">
+                        <TextBlock Text="App Settings" FontWeight="SemiBold" FontSize="16" />
+                        <TextBlock Text="Changes are saved to config.json and take effect immediately (no restart required)." Opacity="0.7" TextWrapping="Wrap" />
+
+                        <TextBlock Text="Bookings License Group Name" Margin="0,8,0,0" />
+                        <TextBox x:Name="TextBoxSettingsBookingsGroup" Width="420" HorizontalAlignment="Left" />
+
+                        <TextBlock Text="Bookings Creators OWA Policy Name" />
+                        <TextBox x:Name="TextBoxSettingsOwaPolicy" Width="420" HorizontalAlignment="Left" />
+
+                        <TextBlock Text="Microsoft Graph API Scopes (one per line)" />
+                        <TextBox x:Name="TextBoxSettingsGraphScopes" AcceptsReturn="True" Height="100" Width="420" TextWrapping="Wrap" HorizontalAlignment="Left" />
+
+                        <TextBlock Text="ServiceNow Integration" FontWeight="SemiBold" Margin="0,8,0,0" />
+                        <CheckBox x:Name="CheckBoxSettingsServiceNowEnabled" Content="Enabled" />
+                        <TextBlock Text="Instance URL" />
+                        <TextBox x:Name="TextBoxSettingsServiceNowInstanceUrl" Width="420" HorizontalAlignment="Left" />
+                        <TextBlock Text="Key Vault URL" />
+                        <TextBox x:Name="TextBoxSettingsServiceNowKeyVaultUrl" Width="420" HorizontalAlignment="Left" />
+                        <TextBlock Text="Subscription Id" />
+                        <TextBox x:Name="TextBoxSettingsServiceNowSubscriptionId" Width="420" HorizontalAlignment="Left" />
+                        <TextBlock Text="Username Secret Name" />
+                        <TextBox x:Name="TextBoxSettingsServiceNowUsernameSecret" Width="420" HorizontalAlignment="Left" />
+                        <TextBlock Text="Password Secret Name" />
+                        <TextBox x:Name="TextBoxSettingsServiceNowPasswordSecret" Width="420" HorizontalAlignment="Left" />
+
+                        <Button x:Name="ButtonSaveSettings" Content="Save Settings" Click="ButtonSaveSettings_Click" Margin="0,8,0,0" />
+                        <TextBlock x:Name="TextBlockSettingsStatus" Opacity="0.7" TextWrapping="Wrap" />
+
+                        <TextBlock Text="EXOKit v1.0.0 - Exchange Admin Toolkit" Opacity="0.6" FontSize="12" Margin="0,24,0,0" />
+                        <TextBlock Text="Developed by Chris Harris" Opacity="0.6" FontSize="12" />
+                    </StackPanel>
+                </ScrollViewer>
+            </Grid>
+        </NavigationView>
+
+        <!-- Output: Log / Ticket Notes -->
+        <Grid Grid.Row="2" Margin="0,8,0,0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+            <Grid Grid.Row="0" Margin="0,0,0,4">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8">
+                    <TextBlock Text="ServiceNow Task/Inc #:" VerticalAlignment="Center" Opacity="0.85" />
+                    <TextBox x:Name="TextBoxServiceNowTicketNumber" Width="160"
+                             ToolTipService.ToolTip="Optional: enter the ServiceNow task or incident number (e.g. TASK0012345). If provided and ServiceNow is enabled in Settings, the ticket will be updated and closed automatically when the next ticket notes are generated." />
+                </StackPanel>
+                <Button Grid.Column="1" x:Name="ButtonToggleOutputCollapse" Click="ButtonToggleOutputCollapse_Click"
+                        Padding="4" MinWidth="0" Background="Transparent" BorderThickness="0"
+                        ToolTipService.ToolTip="Collapse/Expand Output">
+                    <FontIcon x:Name="IconToggleOutputCollapse" Glyph="&#xE70D;" FontSize="14" />
+                </Button>
+            </Grid>
+            <Pivot Grid.Row="1" x:Name="OutputPivot">
+                <PivotItem Header="Log">
+                    <Border BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="4">
+                        <ScrollViewer x:Name="LogScrollViewer" VerticalScrollBarVisibility="Auto" VerticalAlignment="Stretch">
+                            <TextBlock x:Name="TextBlockLog" TextWrapping="Wrap" Padding="8,8,8,20" FontFamily="Consolas" FontSize="12" IsTextSelectionEnabled="True" />
+                        </ScrollViewer>
+                    </Border>
+                </PivotItem>
+                <PivotItem>
+                    <PivotItem.Header>
+                        <StackPanel Orientation="Horizontal" Spacing="4">
+                            <TextBlock Text="Ticket Notes" VerticalAlignment="Center" />
+                            <Button x:Name="ButtonCopyTicketNotes" Click="ButtonCopyTicketNotes_Click"
+                                    Padding="4" MinWidth="0" Background="Transparent" BorderThickness="0"
+                                    ToolTipService.ToolTip="Copy Last Ticket Notes">
+                                <FontIcon Glyph="&#xE8C8;" FontSize="14" />
+                            </Button>
+                        </StackPanel>
+                    </PivotItem.Header>
+                    <Border BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="4">
+                        <ScrollViewer x:Name="TicketNotesScrollViewer" VerticalScrollBarVisibility="Auto" VerticalAlignment="Stretch">
+                            <TextBlock x:Name="TextBlockTicketNotes" TextWrapping="Wrap" Padding="8,8,8,20" FontFamily="Consolas" FontSize="12" IsTextSelectionEnabled="True" />
+                        </ScrollViewer>
+                    </Border>
+                </PivotItem>
+            </Pivot>
+        </Grid>
+    </Grid>
+</Window>
