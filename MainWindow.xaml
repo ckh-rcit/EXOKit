@@ -477,7 +477,7 @@
                         <Button x:Name="ButtonSaveSettings" Content="Save Settings" Click="ButtonSaveSettings_Click" Margin="0,8,0,0" />
                         <TextBlock x:Name="TextBlockSettingsStatus" Opacity="0.7" TextWrapping="Wrap" />
 
-                        <TextBlock Text="EXOKit v1.0.5 - Exchange Admin Toolkit" Opacity="0.6" FontSize="12" Margin="0,24,0,0" />
+                        <TextBlock Text="EXOKit v1.0.6 - Exchange Admin Toolkit" Opacity="0.6" FontSize="12" Margin="0,24,0,0" />
                         <TextBlock Text="Developed by Chris Harris" Opacity="0.6" FontSize="12" />
                     </StackPanel>
                 </ScrollViewer>
@@ -499,6 +499,8 @@
                     <TextBlock Text="ServiceNow Task/Inc #:" VerticalAlignment="Center" Opacity="0.85" />
                     <TextBox x:Name="TextBoxServiceNowTicketNumber" Width="160"
                              ToolTipService.ToolTip="Optional: enter the ServiceNow task or incident number (e.g. TASK0012345). If provided and ServiceNow is enabled in Settings, the ticket will be updated and closed automatically when the next ticket notes are generated." />
+                    <CheckBox x:Name="CheckBoxShowWarnings" Content="Show Warnings" VerticalAlignment="Center" Checked="CheckBoxShowWarnings_Changed" Unchecked="CheckBoxShowWarnings_Changed"
+                              ToolTipService.ToolTip="Warnings (e.g. benign Exchange Online replication warnings) are hidden from the log by default. Check this to display them." />
                 </StackPanel>
                 <Button Grid.Column="1" x:Name="ButtonToggleOutputCollapse" Click="ButtonToggleOutputCollapse_Click"
                         Padding="4" MinWidth="0" Background="Transparent" BorderThickness="0"

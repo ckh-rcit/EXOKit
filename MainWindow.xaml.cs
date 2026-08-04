@@ -55,6 +55,7 @@ namespace EXOKit
         private readonly ObservableCollection<ReportRow> _reportResults = new();
         private double _lastExpandedOutputHeight = 220;
         private bool _outputCollapsed;
+        private bool _showWarnings;
 
         public MainWindow()
         {
@@ -95,12 +96,41 @@ namespace EXOKit
 
         private void OnLogEntryWritten(string line, LogType type)
         {
+            if (type == LogType.Warning && !_showWarnings)
+            {
+                return;
+            }
+
             DispatcherQueue.TryEnqueue(() =>
             {
                 AppendLogLine(line, type);
                 LogScrollViewer.UpdateLayout();
                 LogScrollViewer.ChangeView(null, LogScrollViewer.ScrollableHeight, null, true);
             });
+        }
+
+        /// <summary>
+        /// Toggles whether warning-level log lines (e.g. benign Exchange Online replication warnings) are
+        /// shown in the log panel. Warnings are suppressed by default to reduce noise; checking the box
+        /// re-renders the full log history including any previously hidden warnings.
+        /// </summary>
+        private void CheckBoxShowWarnings_Changed(object sender, RoutedEventArgs e)
+        {
+            _showWarnings = CheckBoxShowWarnings.IsChecked == true;
+
+            TextBlockLog.Inlines.Clear();
+            foreach (var (historyLine, historyType) in Logger.GetHistory())
+            {
+                if (historyType == LogType.Warning && !_showWarnings)
+                {
+                    continue;
+                }
+
+                AppendLogLine(historyLine, historyType);
+            }
+
+            LogScrollViewer.UpdateLayout();
+            LogScrollViewer.ChangeView(null, LogScrollViewer.ScrollableHeight, null, true);
         }
 
         private void AppendLogLine(string line, LogType type)

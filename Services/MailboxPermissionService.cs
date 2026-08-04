@@ -189,7 +189,7 @@ namespace EXOKit.Services
                     }
                     else
                     {
-                        await _exo.AddFullAccessAsync(targetIdentity, user);
+                        await AddFullAccessWithRetryAsync(targetIdentity, user, userObject);
                         Logger.Log("Full Access add command submitted. Pending validation.");
                         statuses.Add("Full Access (Pending Validation)");
                         validationQueue.Add((user, "Full Access"));
@@ -201,7 +201,11 @@ namespace EXOKit.Services
                     {
                         snapshotItems.Add(new SnapshotItem { User = user, Role = "Full Access" });
                     }
-                    await _exo.RemoveFullAccessAsync(targetIdentity, user);
+                    await RunWithNullReferenceRetryAsync(
+                        "Full Access",
+                        () => _exo.RemoveFullAccessAsync(targetIdentity, user),
+                        () => _exo.HasFullAccessAsync(targetIdentity, user, userObject),
+                        expectPresentAfterSuccess: false);
                     Logger.Log("Full Access remove command submitted. Pending validation.");
                     statuses.Add("Full Access (Pending Validation)");
                     validationQueue.Add((user, "Full Access"));
@@ -222,6 +226,77 @@ namespace EXOKit.Services
             }
         }
 
+        /// <summary>
+        /// Add-MailboxPermission has a long-standing, Microsoft-acknowledged Exchange Online server-side
+        /// bug where the cmdlet's response-building code throws "Write-ErrorMessage : Object reference
+        /// not set to an instance of an object" even though the permission was actually granted (this is
+        /// especially common against Microsoft 365 Group mailboxes and newly-created shared mailboxes).
+        /// Rather than surfacing that as a hard failure, treat it as a transient/false-negative error:
+        /// re-check whether the permission actually landed, and only if it still isn't present after a
+        /// short pause do we retry the command once before giving up.
+        /// </summary>
+        private async Task AddFullAccessWithRetryAsync(string targetIdentity, string user, RecipientInfo userObject)
+        {
+            await RunWithNullReferenceRetryAsync(
+                "Full Access",
+                () => _exo.AddFullAccessAsync(targetIdentity, user),
+                () => _exo.HasFullAccessAsync(targetIdentity, user, userObject),
+                expectPresentAfterSuccess: true);
+        }
+
+        /// <summary>
+        /// Several EXO permission cmdlets (Add/Remove-MailboxPermission, Add/Remove-RecipientPermission)
+        /// share a long-standing, Microsoft-acknowledged server-side bug where the cmdlet's response-building
+        /// code throws "Write-ErrorMessage : Object reference not set to an instance of an object" even though
+        /// the change was actually applied (this is especially common against Microsoft 365 Group mailboxes
+        /// and newly-created shared mailboxes). Rather than surfacing that as a hard failure, treat it as a
+        /// transient/false-negative error: re-check whether the change actually landed, and only if it still
+        /// doesn't match the expected state after a short pause do we retry the command once before giving up.
+        /// </summary>
+        /// <param name="permissionLabel">Friendly name used only for logging (e.g. "Full Access", "Send As").</param>
+        /// <param name="action">The add/remove cmdlet invocation to run.</param>
+        /// <param name="checkPresent">Checks whether the permission is currently present.</param>
+        /// <param name="expectPresentAfterSuccess">True for Add (permission should now be present), false for Remove (permission should now be absent).</param>
+        private async Task RunWithNullReferenceRetryAsync(
+            string permissionLabel,
+            Func<Task> action,
+            Func<Task<bool>> checkPresent,
+            bool expectPresentAfterSuccess)
+        {
+            try
+            {
+                await action();
+                return;
+            }
+            catch (Exception ex) when (IsNullReferenceServerError(ex.Message))
+            {
+                Logger.Log($"{permissionLabel} returned a known Exchange Online server-side error (Write-ErrorMessage: Object reference not set). Checking whether the change was applied anyway...", LogType.Warning);
+
+                await Task.Delay(2000);
+                if (await checkPresent() == expectPresentAfterSuccess)
+                {
+                    Logger.Log($"{permissionLabel} change was applied despite the server error. Continuing.", LogType.Success);
+                    return;
+                }
+
+                Logger.Log($"{permissionLabel} change was not applied yet. Retrying once...", LogType.Warning);
+                try
+                {
+                    await action();
+                }
+                catch (Exception retryEx) when (IsNullReferenceServerError(retryEx.Message))
+                {
+                    // The server sometimes throws this same error on a successful retry too; fall back to
+                    // verification instead of failing outright, and let the normal post-batch validation
+                    // step confirm/refute the final state.
+                    Logger.Log($"Retry hit the same Exchange Online server-side error for {permissionLabel}. Deferring to permission validation.", LogType.Warning);
+                }
+            }
+        }
+
+        private static bool IsNullReferenceServerError(string message) =>
+            message.Contains("Object reference not set to an instance of an object", StringComparison.OrdinalIgnoreCase);
+
         private async Task ProcessSendAsAsync(
             PermissionOperationType operationType, string targetIdentity, string user,
             List<string> statuses, List<(string User, string Permission)> validationQueue, List<SnapshotItem> snapshotItems)
@@ -240,7 +315,11 @@ namespace EXOKit.Services
                     }
                     else
                     {
-                        await _exo.AddSendAsAsync(targetIdentity, user);
+                        await RunWithNullReferenceRetryAsync(
+                            "Send As",
+                            () => _exo.AddSendAsAsync(targetIdentity, user),
+                            () => _exo.HasSendAsAsync(targetIdentity, user),
+                            expectPresentAfterSuccess: true);
                         Logger.Log("Send As add command submitted. Pending validation.");
                         statuses.Add("Send As (Pending Validation)");
                         validationQueue.Add((user, "Send As"));
@@ -251,7 +330,11 @@ namespace EXOKit.Services
                     if (existing)
                     {
                         snapshotItems.Add(new SnapshotItem { User = user, Role = "Send As" });
-                        await _exo.RemoveSendAsAsync(targetIdentity, user);
+                        await RunWithNullReferenceRetryAsync(
+                            "Send As",
+                            () => _exo.RemoveSendAsAsync(targetIdentity, user),
+                            () => _exo.HasSendAsAsync(targetIdentity, user),
+                            expectPresentAfterSuccess: false);
                         Logger.Log("Send As remove command submitted. Pending validation.");
                         statuses.Add("Send As (Pending Validation)");
                         validationQueue.Add((user, "Send As"));

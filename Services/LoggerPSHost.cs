@@ -72,6 +72,10 @@ namespace EXOKit.Services
 
         public override void WriteWarningLine(string message) => Logger.Log($"WARNING: {message}", LogType.Warning);
 
+        // Note: warnings are still logged as LogType.Warning here so they're captured in Logger's
+        // history; the UI (MainWindow) is responsible for hiding LogType.Warning lines by default
+        // and revealing them when the user checks "Show Warnings".
+
         public override System.Collections.Generic.Dictionary<string, System.Management.Automation.PSObject> Prompt(
             string caption, string message, System.Collections.ObjectModel.Collection<System.Management.Automation.Host.FieldDescription> descriptions)
         {

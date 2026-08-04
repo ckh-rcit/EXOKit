@@ -33,6 +33,7 @@ namespace EXOKit.Services
         public static event Action<string, LogType>? LogEntryWritten;
 
         private static readonly List<string> _rawLines = new();
+        private static readonly List<(string Line, LogType Type)> _history = new();
         private static readonly object _lock = new();
 
         public static void Log(string message, LogType type = LogType.Info)
@@ -43,9 +44,22 @@ namespace EXOKit.Services
             lock (_lock)
             {
                 _rawLines.Add(line);
+                _history.Add((line, type));
             }
 
             LogEntryWritten?.Invoke(line, type);
+        }
+
+        /// <summary>
+        /// Returns a snapshot of every logged line and its <see cref="LogType"/>, in order, so a UI
+        /// can re-render the full log (e.g. after toggling a "show warnings" filter).
+        /// </summary>
+        public static IReadOnlyList<(string Line, LogType Type)> GetHistory()
+        {
+            lock (_lock)
+            {
+                return _history.ToList();
+            }
         }
 
         public static Color GetColorForType(LogType type) => type switch
