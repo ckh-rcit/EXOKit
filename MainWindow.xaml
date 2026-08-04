@@ -14,25 +14,13 @@
         <MicaBackdrop />
     </Window.SystemBackdrop>
 
-    <Grid Padding="12" RequestedTheme="Dark">
+    <Grid Padding="0" RequestedTheme="Dark">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
-            <RowDefinition x:Name="OutputRow" Height="220" />
         </Grid.RowDefinitions>
 
-        <!-- Connection status bar -->
-        <Border Grid.Row="0" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="4" Padding="12" Margin="0,0,0,8">
-            <StackPanel Orientation="Horizontal" Spacing="12">
-                <Button x:Name="ButtonConnectExo" Content="Connect Exchange Online" Click="ButtonConnectExo_Click" />
-                <Button x:Name="ButtonConnectGraph" Content="Connect Microsoft Graph" Click="ButtonConnectGraph_Click" IsEnabled="False" />
-                <Button x:Name="ButtonDisconnect" Content="Disconnect All" Click="ButtonDisconnect_Click" />
-                <TextBlock x:Name="TextBlockConnectionStatus" Text="Not connected." VerticalAlignment="Center" />
-            </StackPanel>
-        </Border>
-
-        <!-- Sidebar navigation + section content -->
-        <NavigationView Grid.Row="1" x:Name="MainNavigationView"
+        <!-- Sidebar navigation (full height) + section content -->
+        <NavigationView Grid.Row="0" x:Name="MainNavigationView"
                         PaneDisplayMode="Left" IsBackButtonVisible="Collapsed" IsSettingsVisible="False"
                         IsTitleBarAutoPaddingEnabled="False" SelectionChanged="MainNavigationView_SelectionChanged"
                         PaneOpening="MainNavigationView_PaneOpening" PaneClosing="MainNavigationView_PaneClosing">
@@ -50,31 +38,68 @@
                 <NavigationViewItem x:Name="NavItemSettings" Content="Settings" Tag="Settings" />
             </NavigationView.MenuItems>
 
-            <Grid>
+            <Grid Padding="16,12,16,12">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition x:Name="OutputRow" Height="240" />
+                </Grid.RowDefinitions>
+
+                <!-- Connection status bar -->
+                <Border Grid.Row="0" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                        CornerRadius="6" Padding="16,12" Margin="0,0,0,12">
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <Button x:Name="ButtonConnectExo" Content="Connect Exchange Online" Click="ButtonConnectExo_Click" Style="{StaticResource AccentButtonStyle}" />
+                        <Button x:Name="ButtonConnectGraph" Content="Connect Microsoft Graph" Click="ButtonConnectGraph_Click" IsEnabled="False" />
+                        <Button x:Name="ButtonDisconnect" Content="Disconnect All" Click="ButtonDisconnect_Click" />
+                        <Border Width="1" Background="{ThemeResource CardStrokeColorDefaultBrush}" Margin="4,2" />
+                        <TextBlock x:Name="TextBlockConnectionStatus" Text="Not connected." VerticalAlignment="Center" Opacity="0.85" />
+                    </StackPanel>
+                </Border>
+
+                <Grid Grid.Row="1">
                 <!-- Mailboxes -->
                 <ScrollViewer x:Name="PanelMailboxes" Visibility="Visible">
-                    <StackPanel Spacing="8" Padding="8">
-                        <TextBlock Text="Mailbox(es) (one per line, or comma/semicolon separated)" />
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <TextBox x:Name="TextBoxSharedMailboxes" AcceptsReturn="True" Height="80" Width="420" TextWrapping="Wrap" />
-                            <Button Content="Browse..." Click="ButtonBrowseSharedMailboxes_Click" VerticalAlignment="Top" />
+                    <Grid ColumnSpacing="24" Padding="4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <StackPanel Grid.Row="0" Grid.Column="0" Spacing="8">
+                            <TextBlock Text="Mailbox(es) (one per line, or comma/semicolon separated)" Opacity="0.85" />
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <TextBox x:Name="TextBoxSharedMailboxes" AcceptsReturn="True" Height="140" HorizontalAlignment="Stretch" TextWrapping="Wrap" />
+                                <Button Content="Browse..." Click="ButtonBrowseSharedMailboxes_Click" VerticalAlignment="Top" />
+                            </StackPanel>
                         </StackPanel>
-                        <TextBlock Text="Users" />
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <TextBox x:Name="TextBoxMailboxUsers" AcceptsReturn="True" Height="80" Width="420" TextWrapping="Wrap" />
-                            <Button Content="Browse..." Click="ButtonBrowseMailboxUsers_Click" VerticalAlignment="Top" />
+
+                        <StackPanel Grid.Row="0" Grid.Column="1" Spacing="8">
+                            <TextBlock Text="Users" Opacity="0.85" />
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <TextBox x:Name="TextBoxMailboxUsers" AcceptsReturn="True" Height="140" HorizontalAlignment="Stretch" TextWrapping="Wrap" />
+                                <Button Content="Browse..." Click="ButtonBrowseMailboxUsers_Click" VerticalAlignment="Top" />
+                            </StackPanel>
                         </StackPanel>
-                        <StackPanel Orientation="Horizontal" Spacing="16">
-                            <CheckBox x:Name="CheckBoxFullAccess" Content="Full Access" />
-                            <CheckBox x:Name="CheckBoxSendAs" Content="Send As" />
-                            <CheckBox x:Name="CheckBoxSendOnBehalf" Content="Send on Behalf" />
+
+                        <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Spacing="12" Margin="0,16,0,0">
+                            <StackPanel Orientation="Horizontal" Spacing="16">
+                                <CheckBox x:Name="CheckBoxFullAccess" Content="Full Access" />
+                                <CheckBox x:Name="CheckBoxSendAs" Content="Send As" />
+                                <CheckBox x:Name="CheckBoxSendOnBehalf" Content="Send on Behalf" />
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Button x:Name="ButtonAddMailboxPermissions" Content="Add Permissions" Click="ButtonAddMailboxPermissions_Click" Style="{StaticResource AccentButtonStyle}" />
+                                <Button x:Name="ButtonRemoveMailboxPermissions" Content="Remove Permissions" Click="ButtonRemoveMailboxPermissions_Click" />
+                                <Button x:Name="ButtonValidateMailboxes" Content="Validate Input" Click="ButtonValidateMailboxes_Click" />
+                            </StackPanel>
                         </StackPanel>
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <Button x:Name="ButtonAddMailboxPermissions" Content="Add Permissions" Click="ButtonAddMailboxPermissions_Click" />
-                            <Button x:Name="ButtonRemoveMailboxPermissions" Content="Remove Permissions" Click="ButtonRemoveMailboxPermissions_Click" />
-                            <Button x:Name="ButtonValidateMailboxes" Content="Validate Input" Click="ButtonValidateMailboxes_Click" />
-                        </StackPanel>
-                    </StackPanel>
+                    </Grid>
                 </ScrollViewer>
 
                 <!-- Create Mailbox -->
@@ -477,63 +502,64 @@
                         <Button x:Name="ButtonSaveSettings" Content="Save Settings" Click="ButtonSaveSettings_Click" Margin="0,8,0,0" />
                         <TextBlock x:Name="TextBlockSettingsStatus" Opacity="0.7" TextWrapping="Wrap" />
 
-                        <TextBlock Text="EXOKit v1.0.6 - Exchange Admin Toolkit" Opacity="0.6" FontSize="12" Margin="0,24,0,0" />
+                        <TextBlock Text="EXOKit v1.0.7 - Exchange Admin Toolkit" Opacity="0.6" FontSize="12" Margin="0,24,0,0" />
                         <TextBlock Text="Developed by Chris Harris" Opacity="0.6" FontSize="12" />
                     </StackPanel>
                 </ScrollViewer>
+                </Grid>
+
+                <!-- Output: Log / Ticket Notes -->
+                <Grid Grid.Row="2" Margin="0,12,0,0">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <Grid Grid.Row="0" Margin="0,0,0,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8">
+                            <TextBlock Text="ServiceNow Task/Inc #:" VerticalAlignment="Center" Opacity="0.85" />
+                            <TextBox x:Name="TextBoxServiceNowTicketNumber" Width="160"
+                                     ToolTipService.ToolTip="Optional: enter the ServiceNow task or incident number (e.g. TASK0012345). If provided and ServiceNow is enabled in Settings, the ticket will be updated and closed automatically when the next ticket notes are generated." />
+                            <CheckBox x:Name="CheckBoxShowWarnings" Content="Show Warnings" VerticalAlignment="Center" Checked="CheckBoxShowWarnings_Changed" Unchecked="CheckBoxShowWarnings_Changed"
+                                      ToolTipService.ToolTip="Warnings (e.g. benign Exchange Online replication warnings) are hidden from the log by default. Check this to display them." />
+                        </StackPanel>
+                        <Button Grid.Column="1" x:Name="ButtonToggleOutputCollapse" Click="ButtonToggleOutputCollapse_Click"
+                                Padding="4" MinWidth="0" Background="Transparent" BorderThickness="0"
+                                ToolTipService.ToolTip="Collapse/Expand Output">
+                            <FontIcon x:Name="IconToggleOutputCollapse" Glyph="&#xE70D;" FontSize="14" />
+                        </Button>
+                    </Grid>
+                    <Pivot Grid.Row="1" x:Name="OutputPivot">
+                        <PivotItem Header="Log">
+                            <Border BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="4">
+                                <ScrollViewer x:Name="LogScrollViewer" VerticalScrollBarVisibility="Auto" VerticalAlignment="Stretch">
+                                    <TextBlock x:Name="TextBlockLog" TextWrapping="Wrap" Padding="8,8,8,20" FontFamily="Consolas" FontSize="12" IsTextSelectionEnabled="True" />
+                                </ScrollViewer>
+                            </Border>
+                        </PivotItem>
+                        <PivotItem>
+                            <PivotItem.Header>
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                    <TextBlock Text="Ticket Notes" VerticalAlignment="Center" />
+                                    <Button x:Name="ButtonCopyTicketNotes" Click="ButtonCopyTicketNotes_Click"
+                                            Padding="4" MinWidth="0" Background="Transparent" BorderThickness="0"
+                                            ToolTipService.ToolTip="Copy Last Ticket Notes">
+                                        <FontIcon Glyph="&#xE8C8;" FontSize="14" />
+                                    </Button>
+                                </StackPanel>
+                            </PivotItem.Header>
+                            <Border BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="4">
+                                <ScrollViewer x:Name="TicketNotesScrollViewer" VerticalScrollBarVisibility="Auto" VerticalAlignment="Stretch">
+                                    <TextBlock x:Name="TextBlockTicketNotes" TextWrapping="Wrap" Padding="8,8,8,20" FontFamily="Consolas" FontSize="12" IsTextSelectionEnabled="True" />
+                                </ScrollViewer>
+                            </Border>
+                        </PivotItem>
+                    </Pivot>
+                </Grid>
             </Grid>
         </NavigationView>
-
-        <!-- Output: Log / Ticket Notes -->
-        <Grid Grid.Row="2" Margin="0,8,0,0">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="*" />
-            </Grid.RowDefinitions>
-            <Grid Grid.Row="0" Margin="0,0,0,4">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8">
-                    <TextBlock Text="ServiceNow Task/Inc #:" VerticalAlignment="Center" Opacity="0.85" />
-                    <TextBox x:Name="TextBoxServiceNowTicketNumber" Width="160"
-                             ToolTipService.ToolTip="Optional: enter the ServiceNow task or incident number (e.g. TASK0012345). If provided and ServiceNow is enabled in Settings, the ticket will be updated and closed automatically when the next ticket notes are generated." />
-                    <CheckBox x:Name="CheckBoxShowWarnings" Content="Show Warnings" VerticalAlignment="Center" Checked="CheckBoxShowWarnings_Changed" Unchecked="CheckBoxShowWarnings_Changed"
-                              ToolTipService.ToolTip="Warnings (e.g. benign Exchange Online replication warnings) are hidden from the log by default. Check this to display them." />
-                </StackPanel>
-                <Button Grid.Column="1" x:Name="ButtonToggleOutputCollapse" Click="ButtonToggleOutputCollapse_Click"
-                        Padding="4" MinWidth="0" Background="Transparent" BorderThickness="0"
-                        ToolTipService.ToolTip="Collapse/Expand Output">
-                    <FontIcon x:Name="IconToggleOutputCollapse" Glyph="&#xE70D;" FontSize="14" />
-                </Button>
-            </Grid>
-            <Pivot Grid.Row="1" x:Name="OutputPivot">
-                <PivotItem Header="Log">
-                    <Border BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="4">
-                        <ScrollViewer x:Name="LogScrollViewer" VerticalScrollBarVisibility="Auto" VerticalAlignment="Stretch">
-                            <TextBlock x:Name="TextBlockLog" TextWrapping="Wrap" Padding="8,8,8,20" FontFamily="Consolas" FontSize="12" IsTextSelectionEnabled="True" />
-                        </ScrollViewer>
-                    </Border>
-                </PivotItem>
-                <PivotItem>
-                    <PivotItem.Header>
-                        <StackPanel Orientation="Horizontal" Spacing="4">
-                            <TextBlock Text="Ticket Notes" VerticalAlignment="Center" />
-                            <Button x:Name="ButtonCopyTicketNotes" Click="ButtonCopyTicketNotes_Click"
-                                    Padding="4" MinWidth="0" Background="Transparent" BorderThickness="0"
-                                    ToolTipService.ToolTip="Copy Last Ticket Notes">
-                                <FontIcon Glyph="&#xE8C8;" FontSize="14" />
-                            </Button>
-                        </StackPanel>
-                    </PivotItem.Header>
-                    <Border BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="4">
-                        <ScrollViewer x:Name="TicketNotesScrollViewer" VerticalScrollBarVisibility="Auto" VerticalAlignment="Stretch">
-                            <TextBlock x:Name="TextBlockTicketNotes" TextWrapping="Wrap" Padding="8,8,8,20" FontFamily="Consolas" FontSize="12" IsTextSelectionEnabled="True" />
-                        </ScrollViewer>
-                    </Border>
-                </PivotItem>
-            </Pivot>
-        </Grid>
     </Grid>
 </Window>
