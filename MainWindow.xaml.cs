@@ -317,6 +317,7 @@ namespace EXOKit
             NavItemBookings.Icon = show ? new FontIcon { Glyph = "B", FontFamily = new FontFamily("Segoe UI Semibold") } : null;
             NavItemRecipientLookup.Icon = show ? new FontIcon { Glyph = "RL", FontFamily = new FontFamily("Segoe UI Semibold") } : null;
             NavItemReporting.Icon = show ? new FontIcon { Glyph = "Rp", FontFamily = new FontFamily("Segoe UI Semibold") } : null;
+            NavItemSnapshots.Icon = show ? new FontIcon { Glyph = "Sh", FontFamily = new FontFamily("Segoe UI Semibold") } : null;
             NavItemSettings.Icon = show ? new FontIcon { Glyph = "S", FontFamily = new FontFamily("Segoe UI Semibold") } : null;
         }
 
