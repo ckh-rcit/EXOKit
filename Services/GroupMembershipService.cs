@@ -269,6 +269,12 @@ namespace EXOKit.Services
                 }
             }
 
+            var summaryResults = resultMap.ToDictionary(
+                userEntry => userEntry.Key,
+                userEntry => (object)userEntry.Value,
+                StringComparer.OrdinalIgnoreCase);
+            Logger.WriteSummary($"Group Role {actionTitle}", summaryResults);
+
             return resultMap.SelectMany(userEntry => userEntry.Value.Select(groupEntry =>
             {
                 var result = new GroupRoleResult { User = userEntry.Key, Group = groupEntry.Key };

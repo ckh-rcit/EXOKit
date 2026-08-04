@@ -145,6 +145,12 @@ namespace EXOKit.Services
                 }
             }
 
+            var summaryResults = resultMap.ToDictionary(
+                userEntry => userEntry.Key,
+                userEntry => (object)userEntry.Value,
+                StringComparer.OrdinalIgnoreCase);
+            Logger.WriteSummary($"{targetType} Permission {actionVerb}", summaryResults);
+
             return resultMap.SelectMany(userEntry => userEntry.Value.Select(targetEntry => new PermissionResult
             {
                 User = userEntry.Key,
@@ -178,7 +184,9 @@ namespace EXOKit.Services
             Logger.Log($"Attempting {operationType} Full Access...");
             try
             {
-                var hasFullAccess = await _exo.HasFullAccessAsync(targetIdentity, user, userObject);
+                var hasFullAccess = await CheckPermissionStateSafeAsync(
+                    "Full Access",
+                    () => _exo.HasFullAccessAsync(targetIdentity, user, userObject));
 
                 if (operationType == PermissionOperationType.Add)
                 {
@@ -294,6 +302,28 @@ namespace EXOKit.Services
             }
         }
 
+        /// <summary>
+        /// Get-EXOMailboxPermission / Get-MailboxPermission / Get-RecipientPermission can hit the same
+        /// Microsoft-side "Write-ErrorMessage : Object reference not set to an instance of an object"
+        /// server bug as the Add/Remove cmdlets, especially against Microsoft 365 Group-backed shared
+        /// mailboxes. When that happens on the pre-check, the exception previously escaped straight to
+        /// the outer catch and skipped the whole retry/verify path used for the actual Add/Remove call.
+        /// Retry the existence check itself once after a short pause instead of failing outright.
+        /// </summary>
+        private async Task<bool> CheckPermissionStateSafeAsync(string permissionLabel, Func<Task<bool>> checkPresent)
+        {
+            try
+            {
+                return await checkPresent();
+            }
+            catch (Exception ex) when (IsNullReferenceServerError(ex.Message))
+            {
+                Logger.Log($"{permissionLabel} lookup returned a known Exchange Online server-side error (Write-ErrorMessage: Object reference not set). Retrying lookup...", LogType.Warning);
+                await Task.Delay(2000);
+                return await checkPresent();
+            }
+        }
+
         private static bool IsNullReferenceServerError(string message) =>
             message.Contains("Object reference not set to an instance of an object", StringComparison.OrdinalIgnoreCase);
 
@@ -304,7 +334,9 @@ namespace EXOKit.Services
             Logger.Log($"Attempting {operationType} Send As...");
             try
             {
-                var existing = await _exo.HasSendAsAsync(targetIdentity, user);
+                var existing = await CheckPermissionStateSafeAsync(
+                    "Send As",
+                    () => _exo.HasSendAsAsync(targetIdentity, user));
 
                 if (operationType == PermissionOperationType.Add)
                 {
