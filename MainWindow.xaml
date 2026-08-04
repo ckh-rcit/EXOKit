@@ -50,7 +50,7 @@
                         BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1"
                         CornerRadius="6" Padding="16,12" Margin="0,0,0,12">
                     <StackPanel Orientation="Horizontal" Spacing="12">
-                        <Button x:Name="ButtonConnectExo" Content="Connect Exchange Online" Click="ButtonConnectExo_Click" Style="{StaticResource AccentButtonStyle}" />
+                        <Button x:Name="ButtonConnectExo" Content="Connect Exchange Online" Click="ButtonConnectExo_Click" />
                         <Button x:Name="ButtonConnectGraph" Content="Connect Microsoft Graph" Click="ButtonConnectGraph_Click" IsEnabled="False" />
                         <Button x:Name="ButtonDisconnect" Content="Disconnect All" Click="ButtonDisconnect_Click" />
                         <Border Width="1" Background="{ThemeResource CardStrokeColorDefaultBrush}" Margin="4,2" />
@@ -510,7 +510,7 @@
                         <Button x:Name="ButtonSaveSettings" Content="Save Settings" Click="ButtonSaveSettings_Click" Margin="0,8,0,0" />
                         <TextBlock x:Name="TextBlockSettingsStatus" Opacity="0.7" TextWrapping="Wrap" />
 
-                        <TextBlock Text="EXOKit v1.0.10 - Exchange Admin Toolkit" Opacity="0.6" FontSize="12" Margin="0,24,0,0" />
+                        <TextBlock Text="EXOKit v1.0.11 - Exchange Admin Toolkit" Opacity="0.6" FontSize="12" Margin="0,24,0,0" />
                         <TextBlock Text="Developed by Chris Harris" Opacity="0.6" FontSize="12" />
                     </StackPanel>
                 </ScrollViewer>
