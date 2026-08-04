@@ -40,6 +40,7 @@ namespace EXOKit
         private readonly ExoPowerShellService _exo = new();
         private AuthService _authService;
         private GraphService _graphService;
+        private readonly SnapshotService _snapshotService = new();
         private readonly MailboxPermissionService _mailboxPermissionService;
         private readonly GroupMembershipService _groupMembershipService;
         private readonly BookingsService _bookingsService;
@@ -62,8 +63,8 @@ namespace EXOKit
             _config = ConfigService.Load();
             _authService = new AuthService(_config.Settings.GraphApi.Scopes.ToArray(), GetWindowHandle);
             _graphService = new GraphService(_authService, _config.Settings.GraphApi.Scopes.ToArray());
-            _mailboxPermissionService = new MailboxPermissionService(_exo);
-            _groupMembershipService = new GroupMembershipService(_exo, _graphService);
+            _mailboxPermissionService = new MailboxPermissionService(_exo, _snapshotService);
+            _groupMembershipService = new GroupMembershipService(_exo, _graphService, _snapshotService);
             _bookingsService = new BookingsService(_exo, _graphService, _config);
             _recipientLookupService = new RecipientLookupService(_exo);
             _reportingService = new ReportingService(_exo);

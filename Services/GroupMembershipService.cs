@@ -53,11 +53,13 @@ namespace EXOKit.Services
 
         private readonly ExoPowerShellService _exo;
         private readonly GraphService _graph;
+        private readonly SnapshotService _snapshots;
 
-        public GroupMembershipService(ExoPowerShellService exo, GraphService graph)
+        public GroupMembershipService(ExoPowerShellService exo, GraphService graph, SnapshotService? snapshots = null)
         {
             _exo = exo;
             _graph = graph;
+            _snapshots = snapshots ?? new SnapshotService();
         }
 
         public async Task<GroupOperationContext> ResolveGroupOperationContextAsync(string groupEmail, bool exoConnected, bool graphConnected)
@@ -166,6 +168,7 @@ namespace EXOKit.Services
             {
                 Logger.Log($"Processing Group: {groupEmail}");
                 var validationQueue = new List<(string User, GroupRole Role, GroupKind GroupKind, string? GroupId, string? UserId, RecipientInfo? UserRecipient)>();
+                var snapshotItems = new List<SnapshotItem>();
 
                 GroupOperationContext? groupContext;
                 try
@@ -239,7 +242,7 @@ namespace EXOKit.Services
                         }
                         else
                         {
-                            await ProcessRemoveRoleAsync(groupEmail, groupContext, userEmail, role, isPresent, mgUserId, userRecipient, statuses, validationQueue);
+                            await ProcessRemoveRoleAsync(groupEmail, groupContext, userEmail, role, isPresent, mgUserId, userRecipient, statuses, validationQueue, snapshotItems);
                         }
                     }
                 }
@@ -247,6 +250,22 @@ namespace EXOKit.Services
                 if (validationQueue.Count > 0)
                 {
                     await ValidateGroupRoleChangesAsync(operationType, groupEmail, validationQueue, resultMap);
+                }
+
+                if (operationType == PermissionOperationType.Remove && snapshotItems.Count > 0)
+                {
+                    _snapshots.SaveSnapshot(new SnapshotRecord
+                    {
+                        OperationType = "GroupMembershipRemoval",
+                        Target = groupEmail,
+                        Description = $"Removed {snapshotItems.Count} member/owner role(s) from group '{groupEmail}'",
+                        Metadata =
+                        {
+                            ["GroupKind"] = groupContext.GroupKind.ToString(),
+                            ["M365GroupId"] = groupContext.M365GroupId ?? string.Empty
+                        },
+                        Items = snapshotItems
+                    });
                 }
             }
 
@@ -317,7 +336,8 @@ namespace EXOKit.Services
         private async Task ProcessRemoveRoleAsync(
             string groupEmail, GroupOperationContext groupContext, string userEmail, GroupRole role, bool isPresent,
             string? mgUserId, RecipientInfo? userRecipient, List<string> statuses,
-            List<(string User, GroupRole Role, GroupKind GroupKind, string? GroupId, string? UserId, RecipientInfo? UserRecipient)> validationQueue)
+            List<(string User, GroupRole Role, GroupKind GroupKind, string? GroupId, string? UserId, RecipientInfo? UserRecipient)> validationQueue,
+            List<SnapshotItem> snapshotItems)
         {
             if (!isPresent)
             {
@@ -325,6 +345,8 @@ namespace EXOKit.Services
                 statuses.Add($"{role} (Not Found)");
                 return;
             }
+
+            snapshotItems.Add(new SnapshotItem { User = userEmail, UserId = mgUserId, Role = role.ToString() });
 
             try
             {

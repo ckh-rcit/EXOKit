@@ -107,10 +107,33 @@ namespace EXOKit.Services
     /// </summary>
     public static class ConfigService
     {
+        /// <summary>
+        /// Returns a writable directory for config.json. MSIX-packaged installs run from a read-only
+        /// location under Program Files\WindowsApps, so runtime edits (Settings page Save) must be
+        /// persisted under the per-user LocalAppData folder instead of the app's install directory.
+        /// </summary>
+        private static string GetWritableConfigDirectory()
+        {
+            var directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "EXOKit");
+            Directory.CreateDirectory(directory);
+            return directory;
+        }
+
         public static ToolConfig Load(string? configDirectory = null)
         {
-            var directory = configDirectory ?? AppContext.BaseDirectory;
+            var directory = configDirectory ?? GetWritableConfigDirectory();
             var configPath = Path.Combine(directory, "config.json");
+
+            if (!File.Exists(configPath))
+            {
+                // First run (or no prior save): seed the writable location from the bundled config.json
+                // shipped alongside the app, if one exists.
+                var bundledPath = Path.Combine(AppContext.BaseDirectory, "config.json");
+                if (configDirectory == null && File.Exists(bundledPath))
+                {
+                    File.Copy(bundledPath, configPath);
+                }
+            }
 
             if (!File.Exists(configPath))
             {
@@ -145,7 +168,7 @@ namespace EXOKit.Services
         {
             Validate(config);
 
-            var directory = configDirectory ?? AppContext.BaseDirectory;
+            var directory = configDirectory ?? GetWritableConfigDirectory();
             var configPath = Path.Combine(directory, "config.json");
 
             var json = JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true });

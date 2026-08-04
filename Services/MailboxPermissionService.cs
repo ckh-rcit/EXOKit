@@ -46,10 +46,12 @@ namespace EXOKit.Services
     public class MailboxPermissionService
     {
         private readonly ExoPowerShellService _exo;
+        private readonly SnapshotService _snapshots;
 
-        public MailboxPermissionService(ExoPowerShellService exo)
+        public MailboxPermissionService(ExoPowerShellService exo, SnapshotService? snapshots = null)
         {
             _exo = exo;
+            _snapshots = snapshots ?? new SnapshotService();
         }
 
         public async Task<List<PermissionResult>> InvokePermissionOperationAsync(
@@ -80,6 +82,7 @@ namespace EXOKit.Services
                 var sendOnBehalfList = new List<string>();
                 var userObjectMap = new Dictionary<string, RecipientInfo>(StringComparer.OrdinalIgnoreCase);
                 var validationQueue = new List<(string User, string Permission)>();
+                var snapshotItems = new List<SnapshotItem>();
 
                 foreach (var user in userList)
                 {
@@ -101,18 +104,23 @@ namespace EXOKit.Services
 
                     if (permissions.FullAccess)
                     {
-                        await ProcessFullAccessAsync(operationType, targetIdentity, user, userObject, statuses, validationQueue);
+                        await ProcessFullAccessAsync(operationType, targetIdentity, user, userObject, statuses, validationQueue, snapshotItems);
                     }
 
                     if (permissions.SendAs)
                     {
-                        await ProcessSendAsAsync(operationType, targetIdentity, user, statuses, validationQueue);
+                        await ProcessSendAsAsync(operationType, targetIdentity, user, statuses, validationQueue, snapshotItems);
                     }
 
                     if (permissions.SendOnBehalf)
                     {
                         ProcessSendOnBehalfMark(operationType, user, sendOnBehalfList, statuses);
                     }
+                }
+
+                if (permissions.SendOnBehalf && operationType == PermissionOperationType.Remove)
+                {
+                    await CaptureSendOnBehalfBeforeStateAsync(targetIdentity, sendOnBehalfList, snapshotItems);
                 }
 
                 if (sendOnBehalfList.Count > 0)
@@ -123,6 +131,17 @@ namespace EXOKit.Services
                 if (validationQueue.Count > 0)
                 {
                     await ValidatePendingChangesAsync(operationType, targetIdentity, validationQueue, userObjectMap, resultMap);
+                }
+
+                if (operationType == PermissionOperationType.Remove && snapshotItems.Count > 0)
+                {
+                    _snapshots.SaveSnapshot(new SnapshotRecord
+                    {
+                        OperationType = "MailboxPermissionRemoval",
+                        Target = targetIdentity,
+                        Description = $"Removed {snapshotItems.Count} permission(s) from {targetType} '{targetIdentity}'",
+                        Items = snapshotItems
+                    });
                 }
             }
 
@@ -154,7 +173,7 @@ namespace EXOKit.Services
 
         private async Task ProcessFullAccessAsync(
             PermissionOperationType operationType, string targetIdentity, string user, RecipientInfo userObject,
-            List<string> statuses, List<(string User, string Permission)> validationQueue)
+            List<string> statuses, List<(string User, string Permission)> validationQueue, List<SnapshotItem> snapshotItems)
         {
             Logger.Log($"Attempting {operationType} Full Access...");
             try
@@ -178,6 +197,10 @@ namespace EXOKit.Services
                 }
                 else
                 {
+                    if (hasFullAccess)
+                    {
+                        snapshotItems.Add(new SnapshotItem { User = user, Role = "Full Access" });
+                    }
                     await _exo.RemoveFullAccessAsync(targetIdentity, user);
                     Logger.Log("Full Access remove command submitted. Pending validation.");
                     statuses.Add("Full Access (Pending Validation)");
@@ -201,7 +224,7 @@ namespace EXOKit.Services
 
         private async Task ProcessSendAsAsync(
             PermissionOperationType operationType, string targetIdentity, string user,
-            List<string> statuses, List<(string User, string Permission)> validationQueue)
+            List<string> statuses, List<(string User, string Permission)> validationQueue, List<SnapshotItem> snapshotItems)
         {
             Logger.Log($"Attempting {operationType} Send As...");
             try
@@ -227,6 +250,7 @@ namespace EXOKit.Services
                 {
                     if (existing)
                     {
+                        snapshotItems.Add(new SnapshotItem { User = user, Role = "Send As" });
                         await _exo.RemoveSendAsAsync(targetIdentity, user);
                         Logger.Log("Send As remove command submitted. Pending validation.");
                         statuses.Add("Send As (Pending Validation)");
@@ -276,6 +300,25 @@ namespace EXOKit.Services
                     sendOnBehalfList.Add(user);
                 }
                 statuses.Add("Send on Behalf (Pending Removal)");
+            }
+        }
+
+        private async Task CaptureSendOnBehalfBeforeStateAsync(string targetIdentity, List<string> sendOnBehalfList, List<SnapshotItem> snapshotItems)
+        {
+            try
+            {
+                var existingDelegates = await _exo.GetAllSendOnBehalfDelegatesAsync(targetIdentity);
+                foreach (var existingDelegate in existingDelegates)
+                {
+                    if (sendOnBehalfList.Contains(existingDelegate, StringComparer.OrdinalIgnoreCase))
+                    {
+                        snapshotItems.Add(new SnapshotItem { User = existingDelegate, Role = "Send on Behalf" });
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Log($"Failed to capture Send on Behalf snapshot for '{targetIdentity}'. DETAILS: {ex.Message}", LogType.Warning);
             }
         }
 
