@@ -226,6 +226,16 @@ namespace EXOKit.Services
                     Logger.Log("Full Access not found.", LogType.Warning);
                     statuses.Add("Full Access (Not Found)");
                 }
+                else if (IsNullReferenceServerError(ex.Message))
+                {
+                    // Even after RunWithNullReferenceRetryAsync's internal retry/verify, the lookup itself
+                    // can keep hitting the same Exchange Online server-side bug. Don't report a hard
+                    // failure here; defer to the post-batch validation pass, which polls for up to 10
+                    // seconds and will confirm/refute whether the change actually landed.
+                    Logger.Log($"Full Access {operationType} kept hitting the known Exchange Online server-side error. Deferring to post-batch validation.", LogType.Warning);
+                    statuses.Add("Full Access (Pending Validation)");
+                    validationQueue.Add((user, "Full Access"));
+                }
                 else
                 {
                     Logger.Log($"Failed to {operationType} Full Access. DETAILS: {ex.Message}", LogType.Error);
@@ -281,7 +291,11 @@ namespace EXOKit.Services
                 Logger.Log($"{permissionLabel} returned a known Exchange Online server-side error (Write-ErrorMessage: Object reference not set). Checking whether the change was applied anyway...", LogType.Warning);
 
                 await Task.Delay(2000);
-                if (await checkPresent() == expectPresentAfterSuccess)
+                // Get-EXOMailboxPermission / Get-MailboxPermission / Get-RecipientPermission can hit this
+                // same server-side bug on the lookup itself, so this verification check needs the same
+                // safe-retry treatment as the initial pre-check, otherwise the NRE from checkPresent()
+                // escapes this method entirely and the caller sees a hard failure instead of a retry.
+                if (await CheckPermissionStateSafeAsync(permissionLabel, checkPresent) == expectPresentAfterSuccess)
                 {
                     Logger.Log($"{permissionLabel} change was applied despite the server error. Continuing.", LogType.Success);
                     return;
@@ -384,6 +398,12 @@ namespace EXOKit.Services
                 {
                     Logger.Log("Send As not found (confirmed by remove).", LogType.Warning);
                     statuses.Add("Send As (Not Found)");
+                }
+                else if (IsNullReferenceServerError(ex.Message))
+                {
+                    Logger.Log($"Send As {operationType} kept hitting the known Exchange Online server-side error. Deferring to post-batch validation.", LogType.Warning);
+                    statuses.Add("Send As (Pending Validation)");
+                    validationQueue.Add((user, "Send As"));
                 }
                 else
                 {
