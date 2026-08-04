@@ -52,6 +52,18 @@ namespace EXOKit.Services
     }
 
     /// <summary>
+    /// Flattened, x:Bind-friendly projection of a <see cref="SnapshotRecord"/> for display in the Snapshots ListView.
+    /// </summary>
+    public class SnapshotListItem
+    {
+        public string TimestampDisplay { get; set; } = string.Empty;
+        public string OperationType { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public int ItemCount { get; set; }
+        public SnapshotRecord Record { get; set; } = new();
+    }
+
+    /// <summary>
     /// Captures "before" state to timestamped JSON files under a Snapshots folder before destructive
     /// (removal) operations run, and lists/loads those files back so an admin can review or restore them.
     /// </summary>
@@ -115,6 +127,18 @@ namespace EXOKit.Services
             }
 
             return records;
+        }
+
+        public List<SnapshotListItem> ListSnapshotItems()
+        {
+            return ListSnapshots().Select(r => new SnapshotListItem
+            {
+                TimestampDisplay = r.Timestamp.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss"),
+                OperationType = r.OperationType,
+                Description = r.Description,
+                ItemCount = r.Items.Count,
+                Record = r
+            }).ToList();
         }
 
         public SnapshotRecord? LoadSnapshot(string filePath)

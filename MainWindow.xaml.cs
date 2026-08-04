@@ -41,6 +41,8 @@ namespace EXOKit
         private AuthService _authService;
         private GraphService _graphService;
         private readonly SnapshotService _snapshotService = new();
+        private readonly SnapshotRestoreService _snapshotRestoreService;
+        private readonly ObservableCollection<SnapshotListItem> _snapshotItems = new();
         private readonly MailboxPermissionService _mailboxPermissionService;
         private readonly GroupMembershipService _groupMembershipService;
         private readonly BookingsService _bookingsService;
@@ -65,6 +67,7 @@ namespace EXOKit
             _graphService = new GraphService(_authService, _config.Settings.GraphApi.Scopes.ToArray());
             _mailboxPermissionService = new MailboxPermissionService(_exo, _snapshotService);
             _groupMembershipService = new GroupMembershipService(_exo, _graphService, _snapshotService);
+            _snapshotRestoreService = new SnapshotRestoreService(_exo, _graphService);
             _bookingsService = new BookingsService(_exo, _graphService, _config);
             _recipientLookupService = new RecipientLookupService(_exo);
             _reportingService = new ReportingService(_exo);
@@ -74,6 +77,7 @@ namespace EXOKit
             _serviceNowService = _config.Settings.ServiceNow != null ? new ServiceNowService(_config.Settings.ServiceNow) : null;
 
             ListViewReportResults.ItemsSource = _reportResults;
+            ListViewSnapshots.ItemsSource = _snapshotItems;
 
             LoadSettingsIntoUi();
 
@@ -285,6 +289,7 @@ namespace EXOKit
             PanelBookings.Visibility = Visibility.Collapsed;
             PanelRecipientLookup.Visibility = Visibility.Collapsed;
             PanelReporting.Visibility = Visibility.Collapsed;
+            PanelSnapshots.Visibility = Visibility.Collapsed;
             PanelSettings.Visibility = Visibility.Collapsed;
 
             switch (tag)
@@ -320,6 +325,10 @@ namespace EXOKit
                     break;
                 case "Reporting":
                     PanelReporting.Visibility = Visibility.Visible;
+                    break;
+                case "Snapshots":
+                    PanelSnapshots.Visibility = Visibility.Visible;
+                    RefreshSnapshotsList();
                     break;
                 case "Settings":
                     PanelSettings.Visibility = Visibility.Visible;
@@ -994,6 +1003,92 @@ namespace EXOKit
                 return "\"" + value.Replace("\"", "\"\"") + "\"";
             }
             return value;
+        }
+
+        // --- Snapshots ---
+
+        private void RefreshSnapshotsList()
+        {
+            _snapshotItems.Clear();
+            foreach (var item in _snapshotService.ListSnapshotItems())
+            {
+                _snapshotItems.Add(item);
+            }
+
+            ButtonRestoreSnapshot.IsEnabled = false;
+            TextBlockSnapshotsStatus.Text = _snapshotItems.Count == 0
+                ? "No snapshots found yet. Snapshots are created automatically before group membership/owner or mailbox permission removals."
+                : $"{_snapshotItems.Count} snapshot(s) found.";
+        }
+
+        private void ButtonRefreshSnapshots_Click(object sender, RoutedEventArgs e)
+        {
+            RefreshSnapshotsList();
+        }
+
+        private void ListViewSnapshots_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            ButtonRestoreSnapshot.IsEnabled = ListViewSnapshots.SelectedItem is SnapshotListItem;
+        }
+
+        private void ButtonOpenSnapshotsFolder_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                Directory.CreateDirectory(_snapshotService.SnapshotsDirectory);
+                var startInfo = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = _snapshotService.SnapshotsDirectory,
+                    UseShellExecute = true
+                };
+                System.Diagnostics.Process.Start(startInfo);
+            }
+            catch (Exception ex)
+            {
+                Logger.Log($"Failed to open Snapshots folder: {ex.Message}", LogType.Error);
+            }
+        }
+
+        private async void ButtonRestoreSnapshot_Click(object sender, RoutedEventArgs e)
+        {
+            if (ListViewSnapshots.SelectedItem is not SnapshotListItem selected)
+            {
+                return;
+            }
+
+            var confirmed = await ShowConfirmAsync(
+                $"Restore {selected.ItemCount} item(s) from this snapshot?\n\n{selected.Description}\n\nThis will re-add the removed member(s)/owner(s)/permission(s).",
+                "Restore Snapshot");
+            if (!confirmed)
+            {
+                return;
+            }
+
+            ButtonRestoreSnapshot.IsEnabled = false;
+            TextBlockSnapshotsStatus.Text = "Restoring snapshot...";
+
+            try
+            {
+                var results = await _snapshotRestoreService.RestoreAsync(selected.Record);
+                var succeeded = results.Count(r => r.Success);
+                var failed = results.Count - succeeded;
+
+                TextBlockSnapshotsStatus.Text = failed == 0
+                    ? $"Restore complete: {succeeded} item(s) restored successfully."
+                    : $"Restore finished with issues: {succeeded} succeeded, {failed} failed. Check the log for details.";
+
+                Logger.Log($"Snapshot restore complete for '{selected.Record.Target}': {succeeded} succeeded, {failed} failed.",
+                    failed == 0 ? LogType.Success : LogType.Warning);
+            }
+            catch (Exception ex)
+            {
+                TextBlockSnapshotsStatus.Text = $"Restore failed: {ex.Message}";
+                Logger.Log($"Snapshot restore failed: {ex.Message}", LogType.Error);
+            }
+            finally
+            {
+                ButtonRestoreSnapshot.IsEnabled = ListViewSnapshots.SelectedItem is SnapshotListItem;
+            }
         }
 
         // --- Ticket notes ---
