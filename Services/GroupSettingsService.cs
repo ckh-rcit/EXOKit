@@ -41,10 +41,12 @@ namespace EXOKit.Services
         private static readonly string[] SupportedDistributionGroupTypes = { "MailUniversalDistributionGroup", "MailNonUniversalGroup" };
 
         private readonly ExoPowerShellService _exo;
+        private readonly SnapshotService _snapshots;
 
-        public GroupSettingsService(ExoPowerShellService exo)
+        public GroupSettingsService(ExoPowerShellService exo, SnapshotService? snapshots = null)
         {
             _exo = exo;
+            _snapshots = snapshots ?? new SnapshotService();
         }
 
         /// <summary>
@@ -111,6 +113,13 @@ namespace EXOKit.Services
                 Logger.Log($"Executing: Set-DistributionGroup -Identity '{identity}' -RequireSenderAuthenticationEnabled {!allowExternalSenders} -AcceptMessagesOnlyFromSendersOrMembers ...");
                 await _exo.SetDeliveryManagementAsync(identity, allowExternalSenders, specifiedSenders);
                 Logger.Log($"  SUCCESS: Delivery management settings updated for '{identity}'.", LogType.Success);
+
+                WriteGroupSettingsTicketNote(identity, "Delivery Management", new List<string>
+                {
+                    $"Allow Senders Inside and Outside the Organization: {(allowExternalSenders ? "Yes" : "No")}",
+                    $"Specified Senders: {(specifiedSenders.Length > 0 ? string.Join(", ", specifiedSenders) : "(none)")}"
+                });
+
                 return true;
             }
             catch (Exception ex)
@@ -127,16 +136,41 @@ namespace EXOKit.Services
             try
             {
                 var currentSendAs = await _exo.GetSendAsDelegatesAsync(identity);
-                var toAdd = desiredSendAsDelegates.Where(d => !currentSendAs.Contains(d, StringComparer.OrdinalIgnoreCase)).ToArray();
-                var toRemove = currentSendAs.Where(d => !desiredSendAsDelegates.Contains(d, StringComparer.OrdinalIgnoreCase)).ToArray();
+                var toAddSendAs = desiredSendAsDelegates.Where(d => !currentSendAs.Contains(d, StringComparer.OrdinalIgnoreCase)).ToArray();
+                var toRemoveSendAs = currentSendAs.Where(d => !desiredSendAsDelegates.Contains(d, StringComparer.OrdinalIgnoreCase)).ToArray();
 
-                foreach (var d in toAdd)
+                var currentSettings = await _exo.GetDistributionGroupSettingsAsync(identity);
+                var currentSendOnBehalf = currentSettings?.GrantSendOnBehalfTo ?? Array.Empty<string>();
+                var toRemoveSendOnBehalf = currentSendOnBehalf.Where(d => !desiredSendOnBehalfDelegates.Contains(d, StringComparer.OrdinalIgnoreCase)).ToArray();
+
+                var snapshotItems = new List<SnapshotItem>();
+                foreach (var d in toRemoveSendAs)
+                {
+                    snapshotItems.Add(new SnapshotItem { User = d, Role = "Send As" });
+                }
+                foreach (var d in toRemoveSendOnBehalf)
+                {
+                    snapshotItems.Add(new SnapshotItem { User = d, Role = "Send on Behalf" });
+                }
+
+                if (snapshotItems.Count > 0)
+                {
+                    _snapshots.SaveSnapshot(new SnapshotRecord
+                    {
+                        OperationType = "GroupDelegateRemoval",
+                        Target = identity,
+                        Description = $"Removed {snapshotItems.Count} delegate(s) from group '{identity}'",
+                        Items = snapshotItems
+                    });
+                }
+
+                foreach (var d in toAddSendAs)
                 {
                     Logger.Log($"Executing: Add-RecipientPermission -Identity '{identity}' -Trustee '{d}' -AccessRights SendAs");
                     await _exo.AddSendAsDelegateAsync(identity, d);
                 }
 
-                foreach (var d in toRemove)
+                foreach (var d in toRemoveSendAs)
                 {
                     Logger.Log($"Executing: Remove-RecipientPermission -Identity '{identity}' -Trustee '{d}' -AccessRights SendAs");
                     await _exo.RemoveSendAsDelegateAsync(identity, d);
@@ -146,6 +180,15 @@ namespace EXOKit.Services
                 await _exo.SetSendOnBehalfDelegatesAsync(identity, desiredSendOnBehalfDelegates);
 
                 Logger.Log($"  SUCCESS: Delegates updated for '{identity}'.", LogType.Success);
+
+                WriteGroupSettingsTicketNote(identity, "Delegates", new List<string>
+                {
+                    $"Send As Added: {(toAddSendAs.Length > 0 ? string.Join(", ", toAddSendAs) : "(none)")}",
+                    $"Send As Removed: {(toRemoveSendAs.Length > 0 ? string.Join(", ", toRemoveSendAs) : "(none)")}",
+                    $"Send on Behalf: {(desiredSendOnBehalfDelegates.Length > 0 ? string.Join(", ", desiredSendOnBehalfDelegates) : "(none)")}",
+                    $"Send on Behalf Removed: {(toRemoveSendOnBehalf.Length > 0 ? string.Join(", ", toRemoveSendOnBehalf) : "(none)")}"
+                });
+
                 return true;
             }
             catch (Exception ex)
@@ -170,6 +213,15 @@ namespace EXOKit.Services
                 Logger.Log($"Executing: Set-DistributionGroup -Identity '{identity}' -ModerationEnabled {requireModeratorApproval} -ModeratedBy ... -SendModerationNotifications {notifySenderMode}");
                 await _exo.SetMessageApprovalAsync(identity, requireModeratorApproval, moderators, bypassSenders, notifySenderMode);
                 Logger.Log($"  SUCCESS: Message approval settings updated for '{identity}'.", LogType.Success);
+
+                WriteGroupSettingsTicketNote(identity, "Message Approval", new List<string>
+                {
+                    $"Require Moderator Approval: {(requireModeratorApproval ? "Yes" : "No")}",
+                    $"Moderators: {(moderators.Length > 0 ? string.Join(", ", moderators) : "(none)")}",
+                    $"Bypass Moderation Senders: {(bypassSenders.Length > 0 ? string.Join(", ", bypassSenders) : "(none)")}",
+                    $"Notify Sender Mode: {notifySenderMode}"
+                });
+
                 return true;
             }
             catch (Exception ex)
@@ -188,6 +240,13 @@ namespace EXOKit.Services
                 Logger.Log($"Executing: Set-DistributionGroup -Identity '{identity}' -MemberJoinRestriction {joinRestriction} -MemberDepartRestriction {departRestriction}");
                 await _exo.SetMembershipApprovalAsync(identity, joinRestriction, departRestriction);
                 Logger.Log($"  SUCCESS: Membership approval settings updated for '{identity}'.", LogType.Success);
+
+                WriteGroupSettingsTicketNote(identity, "Membership Approval", new List<string>
+                {
+                    $"Join Restriction: {joinRestriction}",
+                    $"Depart Restriction: {departRestriction}"
+                });
+
                 return true;
             }
             catch (Exception ex)
@@ -195,6 +254,18 @@ namespace EXOKit.Services
                 Logger.Log($"  ERROR: Failed to update membership approval settings for '{identity}'. DETAILS: {ex.Message}", LogType.Error);
                 return false;
             }
+        }
+
+        private static void WriteGroupSettingsTicketNote(string identity, string sectionLabel, List<string> details)
+        {
+            Logger.Log("--- For IT Ticket ---", LogType.Ticket);
+            Logger.Log($"Group Settings Change: {sectionLabel}", LogType.Ticket);
+            Logger.Log($"Group: {identity}", LogType.Ticket);
+            foreach (var detail in details)
+            {
+                Logger.Log(detail, LogType.Ticket);
+            }
+            Logger.Log("---------------------", LogType.Ticket);
         }
     }
 }

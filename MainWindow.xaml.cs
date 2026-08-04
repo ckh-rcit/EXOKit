@@ -76,7 +76,7 @@ namespace EXOKit
             _reportingService = new ReportingService(_exo);
             _sharedMailboxService = new SharedMailboxService(_exo);
             _groupCreationService = new GroupCreationService(_exo, _graphService);
-            _groupSettingsService = new GroupSettingsService(_exo);
+            _groupSettingsService = new GroupSettingsService(_exo, _snapshotService);
             _serviceNowService = _config.Settings.ServiceNow != null ? new ServiceNowService(_config.Settings.ServiceNow) : null;
 
             ListViewReportResults.ItemsSource = _reportResults;

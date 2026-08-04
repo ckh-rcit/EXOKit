@@ -134,6 +134,13 @@ namespace EXOKit.Services
             }
 
             Logger.Log("--- Bookings Access Enablement Completed ---");
+
+            var summaryResults = results.ToDictionary(
+                r => r.Key,
+                r => (object)r.Value,
+                StringComparer.OrdinalIgnoreCase);
+            Logger.WriteSummary("Bookings Access", summaryResults);
+
             return results;
         }
     }
