@@ -1264,18 +1264,58 @@ namespace EXOKit
                 return;
             }
 
-            // Mutate the existing config object in place so already-constructed services
-            // (which captured _config by reference) see the updated values immediately.
-            _config.Settings.LicenseGroups.Bookings.GroupName = bookingsGroupName;
-            _config.Settings.OwaPolicies.BookingsCreators = owaPolicy;
-            _config.Settings.GraphApi.Scopes = scopes;
-
             var serviceNowEnabled = CheckBoxSettingsServiceNowEnabled.IsChecked == true;
             var instanceUrl = TextBoxSettingsServiceNowInstanceUrl.Text.Trim();
             var keyVaultUrl = TextBoxSettingsServiceNowKeyVaultUrl.Text.Trim();
             var subscriptionId = TextBoxSettingsServiceNowSubscriptionId.Text.Trim();
             var usernameSecret = TextBoxSettingsServiceNowUsernameSecret.Text.Trim();
             var passwordSecret = TextBoxSettingsServiceNowPasswordSecret.Text.Trim();
+
+            // Validate ServiceNow connectivity/credentials before persisting anything, so the user
+            // finds out immediately if the instance URL, Key Vault, or secrets are wrong.
+            if (serviceNowEnabled)
+            {
+                var candidateConfig = new ServiceNowConfig
+                {
+                    Enabled = true,
+                    InstanceUrl = instanceUrl,
+                    KeyVaultUrl = keyVaultUrl,
+                    SubscriptionId = subscriptionId,
+                    UsernameSecretName = usernameSecret,
+                    PasswordSecretName = passwordSecret,
+                    Table = _config.Settings.ServiceNow?.Table ?? "task",
+                    TicketNumberField = _config.Settings.ServiceNow?.TicketNumberField ?? "number",
+                    CloseStateField = _config.Settings.ServiceNow?.CloseStateField ?? "state",
+                    CloseStateValue = _config.Settings.ServiceNow?.CloseStateValue ?? "3",
+                    WorkNotesField = _config.Settings.ServiceNow?.WorkNotesField ?? "work_notes",
+                    AdditionalCommentsField = _config.Settings.ServiceNow?.AdditionalCommentsField ?? "comments",
+                    UpdateTable = _config.Settings.ServiceNow?.UpdateTable ?? string.Empty,
+                    AdditionalFields = _config.Settings.ServiceNow?.AdditionalFields
+                };
+
+                TextBlockSettingsStatus.Text = "Validating ServiceNow connection...";
+                ButtonSaveSettings.IsEnabled = false;
+                try
+                {
+                    var testResult = await new ServiceNowService(candidateConfig).TestConnectionAsync();
+                    if (!testResult.Success)
+                    {
+                        TextBlockSettingsStatus.Text = $"ServiceNow validation failed: {testResult.Message}";
+                        await ShowMessageAsync(testResult.Message, "ServiceNow Validation Failed");
+                        return;
+                    }
+                }
+                finally
+                {
+                    ButtonSaveSettings.IsEnabled = true;
+                }
+            }
+
+            // Mutate the existing config object in place so already-constructed services
+            // (which captured _config by reference) see the updated values immediately.
+            _config.Settings.LicenseGroups.Bookings.GroupName = bookingsGroupName;
+            _config.Settings.OwaPolicies.BookingsCreators = owaPolicy;
+            _config.Settings.GraphApi.Scopes = scopes;
 
             if (serviceNowEnabled || !string.IsNullOrEmpty(instanceUrl) || !string.IsNullOrEmpty(keyVaultUrl))
             {

@@ -14,17 +14,22 @@
     <Nullable>enable</Nullable>
     <ApplicationIcon>Assets\toolbox.ico</ApplicationIcon>
 
+    </PropertyGroup>
+
     <!--
       Unpackaged, self-contained, single-file publish settings for handing this internal tool out
-      as one .exe with no MSIX install/trust step. These only affect `dotnet publish`, not the
-      normal MSIX-packaged Debug/Release builds used during development in Visual Studio.
+      as one .exe with no MSIX install/trust step. These are scoped to only apply when a
+      RuntimeIdentifier is set (i.e. `dotnet publish -r win-x64 ...` or the win-*.pubxml profiles),
+      so normal F5/Debug and Release builds/deploys from Visual Studio stay MSIX-packaged and
+      debuggable.
     -->
-    <WindowsPackageType>None</WindowsPackageType>
-    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
-    <SelfContained>true</SelfContained>
-    <PublishSingleFile>true</PublishSingleFile>
-    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
-  </PropertyGroup>
+    <PropertyGroup Condition="'$(RuntimeIdentifier)' != ''">
+      <WindowsPackageType>None</WindowsPackageType>
+      <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+      <SelfContained>true</SelfContained>
+      <PublishSingleFile>true</PublishSingleFile>
+      <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
+    </PropertyGroup>
   <ItemGroup>
     <Content Include="Assets\SplashScreen.scale-200.png" />
     <Content Include="Assets\LockScreenLogo.scale-200.png" />

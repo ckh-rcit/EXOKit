@@ -39,6 +39,85 @@ namespace EXOKit.Services
             return secret.Value.Value;
         }
 
+        /// <summary>
+        /// Validates that the configured ServiceNow instance URL and Key Vault secrets are reachable
+        /// and correct, without making any destructive changes. Used by the Settings page to give the
+        /// user immediate feedback when saving ServiceNow configuration.
+        /// </summary>
+        public async Task<ServiceNowResult> TestConnectionAsync()
+        {
+            if (string.IsNullOrWhiteSpace(_config.InstanceUrl) || string.IsNullOrWhiteSpace(_config.KeyVaultUrl) ||
+                string.IsNullOrWhiteSpace(_config.UsernameSecretName) || string.IsNullOrWhiteSpace(_config.PasswordSecretName))
+            {
+                return new ServiceNowResult { Success = false, Message = "Instance URL, Key Vault URL, Username Secret Name, and Password Secret Name are all required." };
+            }
+
+            if (!Uri.TryCreate(_config.InstanceUrl, UriKind.Absolute, out var instanceUri) || (instanceUri.Scheme != Uri.UriSchemeHttp && instanceUri.Scheme != Uri.UriSchemeHttps))
+            {
+                return new ServiceNowResult { Success = false, Message = $"Instance URL '{_config.InstanceUrl}' is not a valid absolute http(s) URL." };
+            }
+
+            if (!Uri.TryCreate(_config.KeyVaultUrl, UriKind.Absolute, out var keyVaultUri) || (keyVaultUri.Scheme != Uri.UriSchemeHttp && keyVaultUri.Scheme != Uri.UriSchemeHttps))
+            {
+                return new ServiceNowResult { Success = false, Message = $"Key Vault URL '{_config.KeyVaultUrl}' is not a valid absolute http(s) URL." };
+            }
+
+            string snUser, snPass;
+            try
+            {
+                snUser = await GetKeyVaultSecretAsync(_config.KeyVaultUrl, _config.UsernameSecretName);
+                snPass = await GetKeyVaultSecretAsync(_config.KeyVaultUrl, _config.PasswordSecretName);
+            }
+            catch (Exception ex)
+            {
+                return new ServiceNowResult { Success = false, Message = $"Failed to retrieve ServiceNow credentials from Key Vault '{_config.KeyVaultUrl}': {ex.Message}" };
+            }
+
+            if (string.IsNullOrEmpty(snUser) || string.IsNullOrEmpty(snPass))
+            {
+                return new ServiceNowResult { Success = false, Message = "Retrieved ServiceNow username or password secret is empty." };
+            }
+
+            var encodedCreds = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{snUser}:{snPass}"));
+            var instanceUrl = _config.InstanceUrl.TrimEnd('/');
+            var table = string.IsNullOrWhiteSpace(_config.Table) ? "task" : _config.Table;
+
+            try
+            {
+                var testUrl = $"{instanceUrl}/api/now/table/{table}?sysparm_limit=1";
+                using var request = new HttpRequestMessage(HttpMethod.Get, testUrl);
+                request.Headers.Authorization = new AuthenticationHeaderValue("Basic", encodedCreds);
+                request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+
+                using var response = await _httpClient.SendAsync(request);
+
+                if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized || response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+                {
+                    return new ServiceNowResult { Success = false, Message = $"ServiceNow rejected the credentials retrieved from Key Vault ({(int)response.StatusCode} {response.StatusCode})." };
+                }
+
+                if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+                {
+                    return new ServiceNowResult { Success = false, Message = $"ServiceNow table '{table}' or instance URL '{instanceUrl}' could not be found (404)." };
+                }
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    return new ServiceNowResult { Success = false, Message = $"ServiceNow returned an unexpected status code: {(int)response.StatusCode} {response.StatusCode}." };
+                }
+
+                return new ServiceNowResult { Success = true, Message = "Successfully connected to ServiceNow and validated credentials." };
+            }
+            catch (HttpRequestException ex)
+            {
+                return new ServiceNowResult { Success = false, Message = $"Could not reach ServiceNow instance '{instanceUrl}': {ex.Message}" };
+            }
+            catch (Exception ex)
+            {
+                return new ServiceNowResult { Success = false, Message = $"ServiceNow connection test failed: {ex.Message}" };
+            }
+        }
+
         public async Task<ServiceNowResult> CloseTaskAsync(string ticketNumber, string workNotes = "", string additionalComments = "")
         {
             if (!_config.Enabled)
