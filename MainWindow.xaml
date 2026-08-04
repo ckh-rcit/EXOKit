@@ -73,18 +73,26 @@
 
                         <StackPanel Grid.Row="0" Grid.Column="0" Spacing="8">
                             <TextBlock Text="Mailbox(es) (one per line, or comma/semicolon separated)" Opacity="0.85" />
-                            <StackPanel Orientation="Horizontal" Spacing="8">
-                                <TextBox x:Name="TextBoxSharedMailboxes" AcceptsReturn="True" Height="140" HorizontalAlignment="Stretch" TextWrapping="Wrap" />
-                                <Button Content="Browse..." Click="ButtonBrowseSharedMailboxes_Click" VerticalAlignment="Top" />
-                            </StackPanel>
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox Grid.Column="0" x:Name="TextBoxSharedMailboxes" AcceptsReturn="True" Height="140" HorizontalAlignment="Stretch" TextWrapping="Wrap" />
+                                <Button Grid.Column="1" Content="Browse..." Click="ButtonBrowseSharedMailboxes_Click" VerticalAlignment="Top" />
+                            </Grid>
                         </StackPanel>
 
                         <StackPanel Grid.Row="0" Grid.Column="1" Spacing="8">
                             <TextBlock Text="Users" Opacity="0.85" />
-                            <StackPanel Orientation="Horizontal" Spacing="8">
-                                <TextBox x:Name="TextBoxMailboxUsers" AcceptsReturn="True" Height="140" HorizontalAlignment="Stretch" TextWrapping="Wrap" />
-                                <Button Content="Browse..." Click="ButtonBrowseMailboxUsers_Click" VerticalAlignment="Top" />
-                            </StackPanel>
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox Grid.Column="0" x:Name="TextBoxMailboxUsers" AcceptsReturn="True" Height="140" HorizontalAlignment="Stretch" TextWrapping="Wrap" />
+                                <Button Grid.Column="1" Content="Browse..." Click="ButtonBrowseMailboxUsers_Click" VerticalAlignment="Top" />
+                            </Grid>
                         </StackPanel>
 
                         <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Spacing="12" Margin="0,16,0,0">
@@ -502,7 +510,7 @@
                         <Button x:Name="ButtonSaveSettings" Content="Save Settings" Click="ButtonSaveSettings_Click" Margin="0,8,0,0" />
                         <TextBlock x:Name="TextBlockSettingsStatus" Opacity="0.7" TextWrapping="Wrap" />
 
-                        <TextBlock Text="EXOKit v1.0.8 - Exchange Admin Toolkit" Opacity="0.6" FontSize="12" Margin="0,24,0,0" />
+                        <TextBlock Text="EXOKit v1.0.9 - Exchange Admin Toolkit" Opacity="0.6" FontSize="12" Margin="0,24,0,0" />
                         <TextBlock Text="Developed by Chris Harris" Opacity="0.6" FontSize="12" />
                     </StackPanel>
                 </ScrollViewer>
