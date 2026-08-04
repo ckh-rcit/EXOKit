@@ -6,6 +6,7 @@ using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Navigation;
+using Microsoft.UI.Windowing;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -62,6 +63,7 @@ namespace EXOKit
             InitializeComponent();
 
             AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "toolbox.ico"));
+            ApplyDarkTitleBar();
 
             _config = ConfigService.Load();
             _authService = new AuthService(_config.Settings.GraphApi.Scopes.ToArray(), GetWindowHandle);
@@ -219,6 +221,28 @@ namespace EXOKit
             catch (Exception ex)
             {
                 Logger.Log($"Could not copy device code to clipboard: {ex.Message}", LogType.Warning);
+            }
+        }
+
+        // --- Title bar ---
+
+        private void ApplyDarkTitleBar()
+        {
+            if (AppWindowTitleBar.IsCustomizationSupported())
+            {
+                var titleBar = AppWindow.TitleBar;
+                titleBar.BackgroundColor = Windows.UI.Color.FromArgb(255, 32, 32, 32);
+                titleBar.InactiveBackgroundColor = Windows.UI.Color.FromArgb(255, 32, 32, 32);
+                titleBar.ForegroundColor = Windows.UI.Color.FromArgb(255, 255, 255, 255);
+                titleBar.InactiveForegroundColor = Windows.UI.Color.FromArgb(255, 200, 200, 200);
+                titleBar.ButtonBackgroundColor = Windows.UI.Color.FromArgb(255, 32, 32, 32);
+                titleBar.ButtonInactiveBackgroundColor = Windows.UI.Color.FromArgb(255, 32, 32, 32);
+                titleBar.ButtonForegroundColor = Windows.UI.Color.FromArgb(255, 255, 255, 255);
+                titleBar.ButtonInactiveForegroundColor = Windows.UI.Color.FromArgb(255, 200, 200, 200);
+                titleBar.ButtonHoverBackgroundColor = Windows.UI.Color.FromArgb(255, 60, 60, 60);
+                titleBar.ButtonHoverForegroundColor = Windows.UI.Color.FromArgb(255, 255, 255, 255);
+                titleBar.ButtonPressedBackgroundColor = Windows.UI.Color.FromArgb(255, 80, 80, 80);
+                titleBar.ButtonPressedForegroundColor = Windows.UI.Color.FromArgb(255, 255, 255, 255);
             }
         }
 
