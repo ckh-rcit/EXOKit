@@ -919,6 +919,73 @@ namespace EXOKit
 
         // --- Reporting ---
 
+        private ReportTargetInfo? _validatedReportTarget;
+
+        private void TextBoxReportingIdentity_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            // Any edit to the identity invalidates the previous Validate result, so the user can't
+            // run a report against a stale/mismatched type confirmation.
+            _validatedReportTarget = null;
+            ButtonGenerateObjectReport.IsEnabled = false;
+            ButtonGetMailboxDelegates.IsEnabled = false;
+            TextBlockReportingValidation.Text = "Enter an identity and click Validate to confirm its type before running a report.";
+        }
+
+        private async void ButtonValidateReportingIdentity_Click(object sender, RoutedEventArgs e)
+        {
+            if (!_exo.IsConnected)
+            {
+                await ShowMessageAsync("Connect to EXO first.", "EXO Not Connected");
+                return;
+            }
+
+            var identity = TextBoxReportingIdentity.Text.Trim();
+            if (string.IsNullOrEmpty(identity))
+            {
+                await ShowMessageAsync("Enter a group, distribution list, or mailbox identity.", "Input Missing");
+                return;
+            }
+
+            ButtonValidateReportingIdentity.IsEnabled = false;
+            ButtonGenerateObjectReport.IsEnabled = false;
+            ButtonGetMailboxDelegates.IsEnabled = false;
+            _validatedReportTarget = null;
+            TextBlockReportingValidation.Text = "Validating...";
+            try
+            {
+                var target = await _reportingService.ClassifyReportTargetAsync(identity);
+                _validatedReportTarget = target;
+
+                switch (target.Kind)
+                {
+                    case ReportTargetKind.Group:
+                        ButtonGenerateObjectReport.IsEnabled = true;
+                        TextBlockReportingValidation.Text = $"'{target.Name}' ({target.PrimarySmtpAddress}) is a {target.FriendlyType}. Use 'Generate Membership/Permissions Report'.";
+                        break;
+                    case ReportTargetKind.Mailbox:
+                        ButtonGetMailboxDelegates.IsEnabled = true;
+                        TextBlockReportingValidation.Text = $"'{target.Name}' ({target.PrimarySmtpAddress}) is a {target.FriendlyType}. Use 'Get Mailbox Delegates'.";
+                        break;
+                    default:
+                        TextBlockReportingValidation.Text = $"'{target.Name}' ({target.PrimarySmtpAddress}) is a '{target.FriendlyType}', which is not supported for reporting.";
+                        Logger.Log($"Reporting validation: '{identity}' resolved to unsupported type '{target.RecipientTypeDetails}'.", LogType.Warning);
+                        break;
+                }
+
+                Logger.Log($"Reporting validation: '{identity}' is a {target.FriendlyType}.", LogType.Success);
+            }
+            catch (Exception ex)
+            {
+                TextBlockReportingValidation.Text = $"Validation failed: {ex.Message}";
+                Logger.Log($"Reporting validation failed for '{identity}': {ex.Message}", LogType.Error);
+                await ShowMessageAsync(ex.Message, "Validation Failed");
+            }
+            finally
+            {
+                ButtonValidateReportingIdentity.IsEnabled = true;
+            }
+        }
+
         private async void ButtonGenerateObjectReport_Click(object sender, RoutedEventArgs e)
         {
             if (!_exo.IsConnected)
@@ -931,6 +998,12 @@ namespace EXOKit
             if (string.IsNullOrEmpty(identity))
             {
                 await ShowMessageAsync("Enter a group, distribution list, or mailbox identity.", "Input Missing");
+                return;
+            }
+
+            if (_validatedReportTarget == null || _validatedReportTarget.Kind != ReportTargetKind.Group)
+            {
+                await ShowMessageAsync("Click Validate first to confirm this identity is a group or distribution list.", "Not Validated");
                 return;
             }
 
@@ -964,8 +1037,8 @@ namespace EXOKit
             }
             finally
             {
-                ButtonGenerateObjectReport.IsEnabled = true;
-                ButtonGetMailboxDelegates.IsEnabled = true;
+                ButtonGenerateObjectReport.IsEnabled = _validatedReportTarget?.Kind == ReportTargetKind.Group;
+                ButtonGetMailboxDelegates.IsEnabled = _validatedReportTarget?.Kind == ReportTargetKind.Mailbox;
             }
         }
 
@@ -981,6 +1054,12 @@ namespace EXOKit
             if (string.IsNullOrEmpty(identity))
             {
                 await ShowMessageAsync("Enter the mailbox or resource email address.", "Input Missing");
+                return;
+            }
+
+            if (_validatedReportTarget == null || _validatedReportTarget.Kind != ReportTargetKind.Mailbox)
+            {
+                await ShowMessageAsync("Click Validate first to confirm this identity is a mailbox.", "Not Validated");
                 return;
             }
 
@@ -1014,8 +1093,8 @@ namespace EXOKit
             }
             finally
             {
-                ButtonGenerateObjectReport.IsEnabled = true;
-                ButtonGetMailboxDelegates.IsEnabled = true;
+                ButtonGenerateObjectReport.IsEnabled = _validatedReportTarget?.Kind == ReportTargetKind.Group;
+                ButtonGetMailboxDelegates.IsEnabled = _validatedReportTarget?.Kind == ReportTargetKind.Mailbox;
             }
         }
 

@@ -18,6 +18,32 @@ namespace EXOKit.Services
     }
 
     /// <summary>
+    /// Broad classification of a resolved report target identity, used by the UI to validate input
+    /// and steer the user toward the correct report action (membership/ownership report for groups,
+    /// mailbox delegate report for mailboxes) before running it.
+    /// </summary>
+    public enum ReportTargetKind
+    {
+        Unsupported,
+        Group,
+        Mailbox
+    }
+
+    /// <summary>
+    /// Result of resolving and classifying a report target identity, surfaced by the Validate action
+    /// in the Reporting UI.
+    /// </summary>
+    public class ReportTargetInfo
+    {
+        public string Identity { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public string PrimarySmtpAddress { get; set; } = string.Empty;
+        public string RecipientTypeDetails { get; set; } = string.Empty;
+        public string FriendlyType { get; set; } = string.Empty;
+        public ReportTargetKind Kind { get; set; }
+    }
+
+    /// <summary>
     /// Ports the reporting logic from M365_Reporting_Tool.ps1 (per-object membership/permission report,
     /// exportable to CSV) and DelegateReporter.ps1 (quick mailbox delegate lookup), combined into a
     /// single Reporting section backed by the existing EXO PowerShell connection.
@@ -106,6 +132,14 @@ namespace EXOKit.Services
                 case "RoomMailbox":
                 case "EquipmentMailbox":
                 case "UserMailbox":
+                case "TeamMailbox":
+                case "LegacyMailbox":
+                case "LinkedMailbox":
+                case "RemoteUserMailbox":
+                case "RemoteSharedMailbox":
+                case "RemoteRoomMailbox":
+                case "RemoteEquipmentMailbox":
+                case "RemoteTeamMailbox":
                     {
                         rows.AddRange(await BuildMailboxPermissionRowsAsync(recipient.Identity ?? identity, objectName, objectSmtp, recipientType));
                         break;
@@ -115,6 +149,51 @@ namespace EXOKit.Services
             }
 
             return rows;
+        }
+
+        /// <summary>
+        /// Resolves an identity and classifies it as a group-type or mailbox-type report target,
+        /// so the UI can validate the input and offer the correct report action before running it.
+        /// </summary>
+        public async Task<ReportTargetInfo> ClassifyReportTargetAsync(string identity)
+        {
+            var recipient = await _exo.GetRecipientAsync(identity);
+            if (recipient == null)
+            {
+                throw new InvalidOperationException($"Could not find a recipient matching '{identity}'.");
+            }
+
+            var recipientType = recipient.RecipientTypeDetails ?? string.Empty;
+            var (kind, friendlyType) = recipientType switch
+            {
+                "GroupMailbox" => (ReportTargetKind.Group, "Microsoft 365 Group"),
+                "MailUniversalDistributionGroup" => (ReportTargetKind.Group, "Distribution List"),
+                "DynamicDistributionGroup" => (ReportTargetKind.Group, "Dynamic Distribution Group"),
+                "MailUniversalSecurityGroup" => (ReportTargetKind.Group, "Mail-Enabled Security Group"),
+                "SharedMailbox" => (ReportTargetKind.Mailbox, "Shared Mailbox"),
+                "RoomMailbox" => (ReportTargetKind.Mailbox, "Room Mailbox"),
+                "EquipmentMailbox" => (ReportTargetKind.Mailbox, "Equipment Mailbox"),
+                "UserMailbox" => (ReportTargetKind.Mailbox, "User Mailbox"),
+                "TeamMailbox" => (ReportTargetKind.Mailbox, "Team Mailbox"),
+                "LegacyMailbox" => (ReportTargetKind.Mailbox, "Legacy Mailbox"),
+                "LinkedMailbox" => (ReportTargetKind.Mailbox, "Linked Mailbox"),
+                "RemoteUserMailbox" => (ReportTargetKind.Mailbox, "Remote (Hybrid) User Mailbox"),
+                "RemoteSharedMailbox" => (ReportTargetKind.Mailbox, "Remote (Hybrid) Shared Mailbox"),
+                "RemoteRoomMailbox" => (ReportTargetKind.Mailbox, "Remote (Hybrid) Room Mailbox"),
+                "RemoteEquipmentMailbox" => (ReportTargetKind.Mailbox, "Remote (Hybrid) Equipment Mailbox"),
+                "RemoteTeamMailbox" => (ReportTargetKind.Mailbox, "Remote (Hybrid) Team Mailbox"),
+                _ => (ReportTargetKind.Unsupported, string.IsNullOrEmpty(recipientType) ? "Unknown" : recipientType)
+            };
+
+            return new ReportTargetInfo
+            {
+                Identity = recipient.Identity ?? identity,
+                Name = recipient.Name ?? identity,
+                PrimarySmtpAddress = recipient.PrimarySmtpAddress ?? identity,
+                RecipientTypeDetails = recipientType,
+                FriendlyType = friendlyType,
+                Kind = kind
+            };
         }
 
         /// <summary>

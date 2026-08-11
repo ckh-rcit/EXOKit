@@ -380,12 +380,14 @@
                     </Grid.RowDefinitions>
                     <StackPanel Grid.Row="0" Spacing="8" Padding="8">
                         <TextBlock Text="Group / Distribution List / Mailbox Identity" />
-                        <TextBox x:Name="TextBoxReportingIdentity" Width="420" HorizontalAlignment="Left" />
+                        <TextBox x:Name="TextBoxReportingIdentity" Width="420" HorizontalAlignment="Left" TextChanged="TextBoxReportingIdentity_TextChanged" />
                         <StackPanel Orientation="Horizontal" Spacing="8">
-                            <Button x:Name="ButtonGenerateObjectReport" Content="Generate Membership/Permissions Report" Click="ButtonGenerateObjectReport_Click" />
-                            <Button x:Name="ButtonGetMailboxDelegates" Content="Get Mailbox Delegates" Click="ButtonGetMailboxDelegates_Click" />
+                            <Button x:Name="ButtonValidateReportingIdentity" Content="Validate" Click="ButtonValidateReportingIdentity_Click" />
+                            <Button x:Name="ButtonGenerateObjectReport" Content="Generate Membership/Permissions Report" Click="ButtonGenerateObjectReport_Click" IsEnabled="False" />
+                            <Button x:Name="ButtonGetMailboxDelegates" Content="Get Mailbox Delegates" Click="ButtonGetMailboxDelegates_Click" IsEnabled="False" />
                             <Button x:Name="ButtonExportReportCsv" Content="Export to CSV..." Click="ButtonExportReportCsv_Click" IsEnabled="False" />
                         </StackPanel>
+                        <TextBlock x:Name="TextBlockReportingValidation" Opacity="0.7" TextWrapping="Wrap" Text="Enter an identity and click Validate to confirm its type before running a report." />
                     </StackPanel>
                     <Border Grid.Row="1" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="4" Margin="8,0,8,8">
                         <ListView x:Name="ListViewReportResults" SelectionMode="None">
@@ -512,7 +514,7 @@
                         <Button x:Name="ButtonSaveSettings" Content="Save Settings" Click="ButtonSaveSettings_Click" Margin="0,8,0,0" />
                         <TextBlock x:Name="TextBlockSettingsStatus" Opacity="0.7" TextWrapping="Wrap" />
 
-                        <TextBlock Text="EXOKit v1.0.19 - Exchange Admin Toolkit" Opacity="0.6" FontSize="12" Margin="0,24,0,0" />
+                        <TextBlock Text="EXOKit v1.0.20 - Exchange Admin Toolkit" Opacity="0.6" FontSize="12" Margin="0,24,0,0" />
                         <TextBlock Text="Developed by Chris Harris" Opacity="0.6" FontSize="12" />
                     </StackPanel>
                 </ScrollViewer>
