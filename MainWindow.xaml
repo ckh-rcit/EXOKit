@@ -437,6 +437,8 @@
                         <StackPanel Orientation="Horizontal" Spacing="8">
                             <Button x:Name="ButtonRefreshSnapshots" Content="Refresh" Click="ButtonRefreshSnapshots_Click" />
                             <Button x:Name="ButtonRestoreSnapshot" Content="Restore Selected" Click="ButtonRestoreSnapshot_Click" IsEnabled="False" />
+                            <Button x:Name="ButtonDeleteSnapshot" Content="Delete Selected" Click="ButtonDeleteSnapshot_Click" IsEnabled="False" />
+                            <Button x:Name="ButtonClearAllSnapshots" Content="Clear All" Click="ButtonClearAllSnapshots_Click" />
                             <Button x:Name="ButtonOpenSnapshotsFolder" Content="Open Snapshots Folder" Click="ButtonOpenSnapshotsFolder_Click" />
                         </StackPanel>
                         <TextBlock x:Name="TextBlockSnapshotsStatus" Opacity="0.7" TextWrapping="Wrap" />
@@ -510,7 +512,7 @@
                         <Button x:Name="ButtonSaveSettings" Content="Save Settings" Click="ButtonSaveSettings_Click" Margin="0,8,0,0" />
                         <TextBlock x:Name="TextBlockSettingsStatus" Opacity="0.7" TextWrapping="Wrap" />
 
-                        <TextBlock Text="EXOKit v1.0.18 - Exchange Admin Toolkit" Opacity="0.6" FontSize="12" Margin="0,24,0,0" />
+                        <TextBlock Text="EXOKit v1.0.19 - Exchange Admin Toolkit" Opacity="0.6" FontSize="12" Margin="0,24,0,0" />
                         <TextBlock Text="Developed by Chris Harris" Opacity="0.6" FontSize="12" />
                     </StackPanel>
                 </ScrollViewer>

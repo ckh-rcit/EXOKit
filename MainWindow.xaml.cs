@@ -1073,6 +1073,7 @@ namespace EXOKit
             }
 
             ButtonRestoreSnapshot.IsEnabled = false;
+            ButtonDeleteSnapshot.IsEnabled = false;
             TextBlockSnapshotsStatus.Text = _snapshotItems.Count == 0
                 ? "No snapshots found yet. Snapshots are created automatically before group membership/owner or mailbox permission removals."
                 : $"{_snapshotItems.Count} snapshot(s) found.";
@@ -1086,6 +1087,75 @@ namespace EXOKit
         private void ListViewSnapshots_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             ButtonRestoreSnapshot.IsEnabled = ListViewSnapshots.SelectedItem is SnapshotListItem;
+            ButtonDeleteSnapshot.IsEnabled = ListViewSnapshots.SelectedItem is SnapshotListItem;
+        }
+
+        private async void ButtonDeleteSnapshot_Click(object sender, RoutedEventArgs e)
+        {
+            if (ListViewSnapshots.SelectedItem is not SnapshotListItem selected)
+            {
+                return;
+            }
+
+            var confirmed = await ShowConfirmAsync(
+                $"Delete this snapshot?\n\n{selected.Description}\n\nThis cannot be undone and the removed item(s) will no longer be restorable from EXOKit.",
+                "Delete Snapshot");
+            if (!confirmed)
+            {
+                return;
+            }
+
+            try
+            {
+                if (_snapshotService.DeleteSnapshot(selected.Record))
+                {
+                    Logger.Log($"Snapshot deleted: '{selected.Description}'.", LogType.Success);
+                }
+                else
+                {
+                    Logger.Log($"Snapshot file could not be found on disk for '{selected.Description}'.", LogType.Warning);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Log($"Failed to delete snapshot: {ex.Message}", LogType.Error);
+                await ShowMessageAsync(ex.Message, "Delete Snapshot Failed");
+            }
+            finally
+            {
+                RefreshSnapshotsList();
+            }
+        }
+
+        private async void ButtonClearAllSnapshots_Click(object sender, RoutedEventArgs e)
+        {
+            if (_snapshotItems.Count == 0)
+            {
+                return;
+            }
+
+            var confirmed = await ShowConfirmAsync(
+                $"Delete all {_snapshotItems.Count} snapshot(s)?\n\nThis cannot be undone and none of the removed items will be restorable from EXOKit afterward.",
+                "Clear All Snapshots");
+            if (!confirmed)
+            {
+                return;
+            }
+
+            try
+            {
+                var count = _snapshotService.DeleteAllSnapshots();
+                Logger.Log($"Cleared {count} snapshot(s).", LogType.Success);
+            }
+            catch (Exception ex)
+            {
+                Logger.Log($"Failed to clear snapshots: {ex.Message}", LogType.Error);
+                await ShowMessageAsync(ex.Message, "Clear All Snapshots Failed");
+            }
+            finally
+            {
+                RefreshSnapshotsList();
+            }
         }
 
         private void ButtonOpenSnapshotsFolder_Click(object sender, RoutedEventArgs e)

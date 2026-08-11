@@ -157,6 +157,41 @@ namespace EXOKit.Services
             return record;
         }
 
+        /// <summary>
+        /// Deletes a single snapshot file from disk. Returns true if a file was found and deleted.
+        /// </summary>
+        public bool DeleteSnapshot(SnapshotRecord record)
+        {
+            if (string.IsNullOrEmpty(record.FilePath) || !File.Exists(record.FilePath))
+            {
+                return false;
+            }
+
+            File.Delete(record.FilePath);
+            Logger.Log($"Snapshot deleted: {Path.GetFileName(record.FilePath)}");
+            return true;
+        }
+
+        /// <summary>
+        /// Deletes all snapshot files under the Snapshots directory. Returns the number of files deleted.
+        /// </summary>
+        public int DeleteAllSnapshots()
+        {
+            if (!Directory.Exists(_snapshotsDirectory))
+            {
+                return 0;
+            }
+
+            var files = Directory.GetFiles(_snapshotsDirectory, "*.json");
+            foreach (var file in files)
+            {
+                File.Delete(file);
+            }
+
+            Logger.Log($"Deleted all snapshots ({files.Length} file(s)).");
+            return files.Length;
+        }
+
         private static string SanitizeForFileName(string value)
         {
             if (string.IsNullOrWhiteSpace(value))
