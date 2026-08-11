@@ -403,20 +403,22 @@ namespace EXOKit.Services
                     if (existing)
                     {
                         snapshotItems.Add(new SnapshotItem { User = user, Role = "Send As" });
-                        await RunWithNullReferenceRetryAsync(
-                            "Send As",
-                            () => _exo.RemoveSendAsAsync(targetIdentity, user),
-                            () => _exo.HasSendAsAsync(targetIdentity, user),
-                            expectPresentAfterSuccess: false);
-                        Logger.Log("Send As remove command submitted. Pending validation.");
-                        statuses.Add("Send As (Pending Validation)");
-                        validationQueue.Add((user, "Send As"));
                     }
-                    else
-                    {
-                        Logger.Log("Send As not found.", LogType.Warning);
-                        statuses.Add("Send As (Not Found)");
-                    }
+
+                    // Don't gate the actual removal on the pre-check result: Get-RecipientPermission can
+                    // lag behind a recent Add-RecipientPermission/Set-Mailbox change (Exchange Online's
+                    // Get-* cmdlets read from an eventually-consistent cache), which previously caused a
+                    // Send As permission that genuinely exists to be skipped entirely and misreported as
+                    // "Not Found". Always attempt the removal and let the cmdlet's own "wasn't found on
+                    // object" error (handled below) determine whether the permission truly doesn't exist.
+                    await RunWithNullReferenceRetryAsync(
+                        "Send As",
+                        () => _exo.RemoveSendAsAsync(targetIdentity, user),
+                        () => _exo.HasSendAsAsync(targetIdentity, user),
+                        expectPresentAfterSuccess: false);
+                    Logger.Log("Send As remove command submitted. Pending validation.");
+                    statuses.Add("Send As (Pending Validation)");
+                    validationQueue.Add((user, "Send As"));
                 }
             }
             catch (Exception ex)
@@ -533,12 +535,21 @@ namespace EXOKit.Services
             Dictionary<string, RecipientInfo> userObjectMap,
             Dictionary<string, Dictionary<string, List<string>>> resultMap)
         {
-            Logger.Log($"Validating applied permission changes for '{targetIdentity}' once per second for up to 10 seconds...");
+            // Exchange Online's Get-* cmdlets (Get-EXOMailboxPermission, Get-RecipientPermission,
+            // Get-Mailbox) read from an eventually-consistent cache that can lag noticeably behind the
+            // Add/Remove/Set cmdlets that actually mutate the permission, especially against Microsoft
+            // 365 Group-backed shared mailboxes. Polling once per second for 10 seconds was too
+            // aggressive and produced false "Verify Failed"/"Not Found" results even though the change
+            // had landed. Poll less frequently (every 2 seconds) for longer (up to 30 seconds total) to
+            // give replication more time to catch up before giving up.
+            const int maxAttempts = 15;
+            const int delayMs = 2000;
+            Logger.Log($"Validating applied permission changes for '{targetIdentity}' every {delayMs / 1000} seconds for up to {maxAttempts * delayMs / 1000} seconds...");
             var pending = new List<(string User, string Permission)>(validationQueue);
 
-            for (var attempt = 1; attempt <= 10 && pending.Count > 0; attempt++)
+            for (var attempt = 1; attempt <= maxAttempts && pending.Count > 0; attempt++)
             {
-                await Task.Delay(1000);
+                await Task.Delay(delayMs);
                 var remaining = new List<(string User, string Permission)>();
 
                 foreach (var item in pending)
@@ -582,8 +593,15 @@ namespace EXOKit.Services
 
                 var opWord = operationType == PermissionOperationType.Add ? "add" : "remove";
                 var stillOrNo = operationType == PermissionOperationType.Add ? "verification found no matching permission" : "permission still present";
-                Logger.Log($"WARNING: {item.Permission} {opWord} command succeeded but {stillOrNo} for '{item.User}' within 10 seconds.", LogType.Warning);
-                var suffix = operationType == PermissionOperationType.Add ? "Add - Verify Failed" : "Remove - Verify Failed";
+                var timeoutSeconds = maxAttempts * delayMs / 1000;
+                // The command was already confirmed to have been submitted successfully (no exception was
+                // thrown, or the retry/verify path already handled the known server-side error). Reaching
+                // this point only means EXO's read-side cache hadn't caught up within the polling window,
+                // not that the change failed. Report it as "Unconfirmed" rather than "Verify Failed" so the
+                // ticket note doesn't read as a hard failure when manual verification will likely show the
+                // change actually applied.
+                Logger.Log($"{item.Permission} {opWord} command succeeded but could not be confirmed for '{item.User}' within {timeoutSeconds} seconds. This is often an Exchange Online replication delay rather than an actual failure - please verify manually before assuming it did not apply.", LogType.Warning);
+                var suffix = operationType == PermissionOperationType.Add ? "Add - Unconfirmed, Verify Manually" : "Remove - Unconfirmed, Verify Manually";
                 ReplaceStatus(statuses, $"{item.Permission} (Pending Validation)", $"{item.Permission} ({suffix})");
             }
         }
