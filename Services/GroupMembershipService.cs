@@ -354,12 +354,23 @@ namespace EXOKit.Services
         {
             if (!isPresent)
             {
-                Logger.Log($"    STATUS: {role} not found.", LogType.Warning);
-                statuses.Add($"{role} (Not Found)");
-                return;
+                // Exchange Online's ManagedBy attribute (used for Distribution Group owners) reads from an
+                // eventually-consistent AD replica, which can lag behind a recent add and cause this
+                // pre-check to report "not present" even though the owner role genuinely exists. Only
+                // trust a negative pre-check outright for M365 Group roles (Graph's membership/ownership
+                // checks are far more consistent); for Distribution Group Owner/Member roles, still attempt
+                // the removal and let the cmdlet's own "not found" style error confirm the true state.
+                if (groupContext.GroupKind == GroupKind.M365)
+                {
+                    Logger.Log($"    STATUS: {role} not found.", LogType.Warning);
+                    statuses.Add($"{role} (Not Found)");
+                    return;
+                }
             }
-
-            snapshotItems.Add(new SnapshotItem { User = userEmail, UserId = mgUserId, Role = role.ToString() });
+            else
+            {
+                snapshotItems.Add(new SnapshotItem { User = userEmail, UserId = mgUserId, Role = role.ToString() });
+            }
 
             try
             {
@@ -415,12 +426,19 @@ namespace EXOKit.Services
             List<(string User, GroupRole Role, GroupKind GroupKind, string? GroupId, string? UserId, RecipientInfo? UserRecipient)> validationQueue,
             Dictionary<string, Dictionary<string, List<string>>> resultMap)
         {
-            Logger.Log($"Validating group role changes for '{groupEmail}' once per second for up to 10 seconds...");
+            // Exchange Online's ManagedBy attribute (Distribution Group owners) and, to a lesser extent,
+            // group membership reads can lag behind the Add/Remove cmdlets that mutate them. The previous
+            // 1-second/10-attempt window was too short for ManagedBy replication in particular, causing
+            // genuine ownership changes to be reported as "Verify Failed" even though they had landed.
+            // Poll less frequently (every 2 seconds) for longer (up to 30 seconds total).
+            const int maxAttempts = 15;
+            const int delayMs = 2000;
+            Logger.Log($"Validating group role changes for '{groupEmail}' every {delayMs / 1000} seconds for up to {maxAttempts * delayMs / 1000} seconds...");
             var pending = new List<(string User, GroupRole Role, GroupKind GroupKind, string? GroupId, string? UserId, RecipientInfo? UserRecipient)>(validationQueue);
 
-            for (var attempt = 1; attempt <= 10 && pending.Count > 0; attempt++)
+            for (var attempt = 1; attempt <= maxAttempts && pending.Count > 0; attempt++)
             {
-                await Task.Delay(1000);
+                await Task.Delay(delayMs);
                 var remaining = new List<(string User, GroupRole Role, GroupKind GroupKind, string? GroupId, string? UserId, RecipientInfo? UserRecipient)>();
 
                 foreach (var item in pending)
@@ -456,10 +474,13 @@ namespace EXOKit.Services
                     continue;
                 }
 
-                var suffix = operationType == PermissionOperationType.Add ? "Add - Verify Failed" : "Remove - Verify Failed";
+                var suffix = operationType == PermissionOperationType.Add ? "Add - Unconfirmed, Verify Manually" : "Remove - Unconfirmed, Verify Manually";
                 var opWord = operationType == PermissionOperationType.Add ? "add" : "remove";
-                var stillOrNo = operationType == PermissionOperationType.Add ? "verification found no matching role" : "role still present";
-                Logger.Log($"    WARNING: {item.Role} {opWord} command succeeded but {stillOrNo} for '{item.User}' within 10 seconds.", LogType.Warning);
+                var timeoutSeconds = maxAttempts * delayMs / 1000;
+                // The add/remove command already succeeded (no exception was thrown). Reaching this point
+                // only means the ManagedBy/membership read-side hadn't caught up within the polling window,
+                // not that the change failed. Report it as "Unconfirmed" rather than "Verify Failed".
+                Logger.Log($"    {item.Role} {opWord} command succeeded but could not be confirmed for '{item.User}' within {timeoutSeconds} seconds. This is often an Exchange Online replication delay rather than an actual failure - please verify manually before assuming it did not apply.", LogType.Warning);
                 ReplaceStatus(statuses, $"{item.Role} (Pending Validation)", $"{item.Role} ({suffix})");
             }
         }
