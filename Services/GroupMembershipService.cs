@@ -254,18 +254,25 @@ namespace EXOKit.Services
 
                 if (operationType == PermissionOperationType.Remove && snapshotItems.Count > 0)
                 {
-                    _snapshots.SaveSnapshot(new SnapshotRecord
+                    try
                     {
-                        OperationType = "GroupMembershipRemoval",
-                        Target = groupEmail,
-                        Description = $"Removed {snapshotItems.Count} member/owner role(s) from group '{groupEmail}'",
-                        Metadata =
+                        _snapshots.SaveSnapshot(new SnapshotRecord
                         {
-                            ["GroupKind"] = groupContext.GroupKind.ToString(),
-                            ["M365GroupId"] = groupContext.M365GroupId ?? string.Empty
-                        },
-                        Items = snapshotItems
-                    });
+                            OperationType = "GroupMembershipRemoval",
+                            Target = groupEmail,
+                            Description = $"Removed {snapshotItems.Count} member/owner role(s) from group '{groupEmail}'",
+                            Metadata =
+                            {
+                                ["GroupKind"] = groupContext.GroupKind.ToString(),
+                                ["M365GroupId"] = groupContext.M365GroupId ?? string.Empty
+                            },
+                            Items = snapshotItems
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Log($"Failed to save group membership removal snapshot for '{groupEmail}'. DETAILS: {ex.Message}", LogType.Error);
+                    }
                 }
             }
 

@@ -155,13 +155,20 @@ namespace EXOKit.Services
 
                 if (snapshotItems.Count > 0)
                 {
-                    _snapshots.SaveSnapshot(new SnapshotRecord
+                    try
                     {
-                        OperationType = "GroupDelegateRemoval",
-                        Target = identity,
-                        Description = $"Removed {snapshotItems.Count} delegate(s) from group '{identity}'",
-                        Items = snapshotItems
-                    });
+                        _snapshots.SaveSnapshot(new SnapshotRecord
+                        {
+                            OperationType = "GroupDelegateRemoval",
+                            Target = identity,
+                            Description = $"Removed {snapshotItems.Count} delegate(s) from group '{identity}'",
+                            Items = snapshotItems
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Log($"Failed to save group delegate removal snapshot for '{identity}'. DETAILS: {ex.Message}", LogType.Error);
+                    }
                 }
 
                 foreach (var d in toAddSendAs)

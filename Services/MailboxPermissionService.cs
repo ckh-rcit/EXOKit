@@ -135,13 +135,20 @@ namespace EXOKit.Services
 
                 if (operationType == PermissionOperationType.Remove && snapshotItems.Count > 0)
                 {
-                    _snapshots.SaveSnapshot(new SnapshotRecord
+                    try
                     {
-                        OperationType = "MailboxPermissionRemoval",
-                        Target = targetIdentity,
-                        Description = $"Removed {snapshotItems.Count} permission(s) from {targetType} '{targetIdentity}'",
-                        Items = snapshotItems
-                    });
+                        _snapshots.SaveSnapshot(new SnapshotRecord
+                        {
+                            OperationType = "MailboxPermissionRemoval",
+                            Target = targetIdentity,
+                            Description = $"Removed {snapshotItems.Count} permission(s) from {targetType} '{targetIdentity}'",
+                            Items = snapshotItems
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Log($"Failed to save permission removal snapshot for '{targetIdentity}'. DETAILS: {ex.Message}", LogType.Error);
+                    }
                 }
             }
 
@@ -182,6 +189,26 @@ namespace EXOKit.Services
             List<string> statuses, List<(string User, string Permission)> validationQueue, List<SnapshotItem> snapshotItems)
         {
             Logger.Log($"Attempting {operationType} Full Access...");
+
+            // Per Microsoft's own documentation (Manage permissions for recipients in Exchange Online),
+            // Full Access is only supported on User mailboxes, Resource mailboxes, Shared mailboxes, and
+            // Discovery mailboxes. Microsoft 365 Group mailboxes are NOT a supported target for
+            // Add-MailboxPermission / Remove-MailboxPermission at all; against those targets the cmdlets
+            // don't just intermittently fail, they reliably throw the "Object reference not set" error
+            // because the operation is unsupported, not because of a transient server bug. Check the
+            // target's recipient type upfront and fail fast with an actionable message instead of
+            // retrying an operation that can never succeed.
+            var recipientTypeDetails = await _exo.GetRecipientTypeAsync(targetIdentity);
+            if (string.Equals(recipientTypeDetails, "GroupMailbox", StringComparison.OrdinalIgnoreCase))
+            {
+                Logger.Log(
+                    $"Full Access is not supported on Microsoft 365 Group mailboxes (target '{targetIdentity}' is Group-backed). " +
+                    "Use Send As or Send on Behalf instead, or manage this via the group's owners/members.",
+                    LogType.Error);
+                statuses.Add("Full Access (Not Supported on M365 Group)");
+                return;
+            }
+
             try
             {
                 var hasFullAccess = await CheckPermissionStateSafeAsync(
