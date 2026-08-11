@@ -514,7 +514,7 @@
                         <Button x:Name="ButtonSaveSettings" Content="Save Settings" Click="ButtonSaveSettings_Click" Margin="0,8,0,0" />
                         <TextBlock x:Name="TextBlockSettingsStatus" Opacity="0.7" TextWrapping="Wrap" />
 
-                        <TextBlock Text="EXOKit v1.0.20 - Exchange Admin Toolkit" Opacity="0.6" FontSize="12" Margin="0,24,0,0" />
+                        <TextBlock Text="EXOKit v1.0.21 - Exchange Admin Toolkit" Opacity="0.6" FontSize="12" Margin="0,24,0,0" />
                         <TextBlock Text="Developed by Chris Harris" Opacity="0.6" FontSize="12" />
                     </StackPanel>
                 </ScrollViewer>

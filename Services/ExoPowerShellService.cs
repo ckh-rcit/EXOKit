@@ -617,14 +617,16 @@ namespace EXOKit.Services
         });
 
         /// <summary>
-        /// Enumerates all non-inherited, non-system Full Access delegates for a mailbox, ported from
-        /// both reporting scripts' Get-MailboxPermission usage.
+        /// Enumerates all non-inherited, non-system Full Access delegates for a mailbox. Uses the
+        /// REST-backed Get-EXOMailboxPermission cmdlet rather than the legacy Get-MailboxPermission,
+        /// which can be extremely slow (or appear to hang) on mailboxes with many system/inherited
+        /// permission entries.
         /// </summary>
         public Task<List<string>> GetAllFullAccessDelegatesAsync(string mailboxIdentity) => RunOnStaThreadAsync(() =>
         {
             using var ps = PowerShell.Create();
             ps.Runspace = _runspace;
-            ps.AddCommand("Get-MailboxPermission").AddParameter("Identity", mailboxIdentity).AddParameter("ErrorAction", "Stop");
+            ps.AddCommand("Get-EXOMailboxPermission").AddParameter("Identity", mailboxIdentity).AddParameter("ResultSize", "Unlimited").AddParameter("ErrorAction", "Stop");
             var results = ps.Invoke();
             if (ps.HadErrors) throw BuildPipelineException(ps);
 
@@ -632,23 +634,27 @@ namespace EXOKit.Services
                 .Where(r =>
                 {
                     var accessRights = r.Properties["AccessRights"]?.Value as IEnumerable<object>;
+                    var deny = r.Properties["Deny"]?.Value is bool d && d;
                     var user = r.Properties["User"]?.Value?.ToString() ?? string.Empty;
-                    return (accessRights?.Any(a => string.Equals(a?.ToString(), "FullAccess", StringComparison.OrdinalIgnoreCase)) ?? false)
-                        && !user.StartsWith("NT AUTHORITY\\", StringComparison.OrdinalIgnoreCase);
+                    return !deny
+                        && (accessRights?.Any(a => string.Equals(a?.ToString(), "FullAccess", StringComparison.OrdinalIgnoreCase)) ?? false)
+                        && !user.StartsWith("NT AUTHORITY\\", StringComparison.OrdinalIgnoreCase)
+                        && !user.StartsWith("S-1-5-", StringComparison.OrdinalIgnoreCase);
                 })
                 .Select(r => r.Properties["User"]?.Value?.ToString() ?? string.Empty)
                 .ToList();
         });
 
         /// <summary>
-        /// Enumerates all Send As delegates for a mailbox, ported from both reporting scripts'
-        /// Get-RecipientPermission usage.
+        /// Enumerates all Send As delegates for a mailbox. Uses the REST-backed
+        /// Get-EXORecipientPermission cmdlet rather than the legacy Get-RecipientPermission, which can
+        /// be extremely slow (or appear to hang) on mailboxes with many system/inherited entries.
         /// </summary>
         public Task<List<string>> GetAllSendAsDelegatesAsync(string mailboxIdentity) => RunOnStaThreadAsync(() =>
         {
             using var ps = PowerShell.Create();
             ps.Runspace = _runspace;
-            ps.AddCommand("Get-RecipientPermission").AddParameter("Identity", mailboxIdentity).AddParameter("ErrorAction", "Stop");
+            ps.AddCommand("Get-EXORecipientPermission").AddParameter("Identity", mailboxIdentity).AddParameter("ResultSize", "Unlimited").AddParameter("ErrorAction", "Stop");
             var results = ps.Invoke();
             if (ps.HadErrors) throw BuildPipelineException(ps);
 
@@ -656,9 +662,12 @@ namespace EXOKit.Services
                 .Where(r =>
                 {
                     var accessRights = r.Properties["AccessRights"]?.Value as IEnumerable<object>;
+                    var deny = r.Properties["AccessControlType"]?.Value?.ToString() == "Deny";
                     var trustee = r.Properties["Trustee"]?.Value?.ToString() ?? string.Empty;
-                    return (accessRights?.Any(a => string.Equals(a?.ToString(), "SendAs", StringComparison.OrdinalIgnoreCase)) ?? false)
-                        && !trustee.StartsWith("NT AUTHORITY\\", StringComparison.OrdinalIgnoreCase);
+                    return !deny
+                        && (accessRights?.Any(a => string.Equals(a?.ToString(), "SendAs", StringComparison.OrdinalIgnoreCase)) ?? false)
+                        && !trustee.StartsWith("NT AUTHORITY\\", StringComparison.OrdinalIgnoreCase)
+                        && !trustee.StartsWith("S-1-5-", StringComparison.OrdinalIgnoreCase);
                 })
                 .Select(r => r.Properties["Trustee"]?.Value?.ToString() ?? string.Empty)
                 .ToList();
