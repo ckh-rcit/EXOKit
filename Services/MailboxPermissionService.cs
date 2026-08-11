@@ -400,10 +400,12 @@ namespace EXOKit.Services
                 }
                 else
                 {
-                    if (existing)
-                    {
-                        snapshotItems.Add(new SnapshotItem { User = user, Role = "Send As" });
-                    }
+                    // Always capture the "before" snapshot item ahead of attempting the removal, even when
+                    // the pre-check reported the permission as absent: that pre-check can be a false
+                    // negative (Get-RecipientPermission lags behind recent changes), and if the removal
+                    // below succeeds anyway, we still need the snapshot to exist so the change can be
+                    // restored/undone later.
+                    snapshotItems.Add(new SnapshotItem { User = user, Role = "Send As" });
 
                     // Don't gate the actual removal on the pre-check result: Get-RecipientPermission can
                     // lag behind a recent Add-RecipientPermission/Set-Mailbox change (Exchange Online's
@@ -427,6 +429,10 @@ namespace EXOKit.Services
                 {
                     Logger.Log("Send As not found (confirmed by remove).", LogType.Warning);
                     statuses.Add("Send As (Not Found)");
+                    // The removal genuinely didn't apply, so the speculative snapshot item captured above
+                    // (in case the pre-check was a false negative) doesn't reflect a real prior state and
+                    // must be removed to avoid a bogus restore entry.
+                    snapshotItems.RemoveAll(si => si.Role == "Send As" && string.Equals(si.User, user, StringComparison.OrdinalIgnoreCase));
                 }
                 else if (IsNullReferenceServerError(ex.Message))
                 {
@@ -438,6 +444,7 @@ namespace EXOKit.Services
                 {
                     Logger.Log($"Failed to {operationType} Send As. DETAILS: {ex.Message}", LogType.Error);
                     statuses.Add("Send As (Error)");
+                    snapshotItems.RemoveAll(si => si.Role == "Send As" && string.Equals(si.User, user, StringComparison.OrdinalIgnoreCase));
                 }
             }
         }

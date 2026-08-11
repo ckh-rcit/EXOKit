@@ -939,7 +939,7 @@ namespace EXOKit
             ButtonExportReportCsv.IsEnabled = false;
             try
             {
-                Logger.Log($"Generating report for '{identity}'...");
+                Logger.Log($"Resolving recipient '{identity}'...");
                 var rows = await _reportingService.GenerateObjectReportAsync(identity);
                 _reportResults.Clear();
                 foreach (var row in rows)
@@ -959,7 +959,8 @@ namespace EXOKit
             }
             catch (Exception ex)
             {
-                Logger.Log($"Report generation failed: {ex.Message}", LogType.Error);
+                Logger.Log($"Report generation failed for '{identity}': {ex.Message}", LogType.Error);
+                await ShowMessageAsync(ex.Message, "Report Generation Failed");
             }
             finally
             {
@@ -1008,7 +1009,8 @@ namespace EXOKit
             }
             catch (Exception ex)
             {
-                Logger.Log($"Delegate lookup failed: {ex.Message}", LogType.Error);
+                Logger.Log($"Delegate lookup failed for '{identity}': {ex.Message}", LogType.Error);
+                await ShowMessageAsync(ex.Message, "Delegate Lookup Failed");
             }
             finally
             {
@@ -1091,16 +1093,24 @@ namespace EXOKit
             try
             {
                 Directory.CreateDirectory(_snapshotService.SnapshotsDirectory);
+
+                // Passing the directory path directly as ProcessStartInfo.FileName with
+                // UseShellExecute=true relies on the shell resolving a folder as its own "verb", which
+                // can fail with "This location is not available" for MSIX-packaged apps (the per-user
+                // LocalApplicationData path is a virtualized package folder that Explorer can be picky
+                // about opening directly). Launching explorer.exe with the path as an argument is the
+                // more reliable way to open a folder window from a packaged app.
                 var startInfo = new System.Diagnostics.ProcessStartInfo
                 {
-                    FileName = _snapshotService.SnapshotsDirectory,
+                    FileName = "explorer.exe",
+                    Arguments = $"\"{_snapshotService.SnapshotsDirectory}\"",
                     UseShellExecute = true
                 };
                 System.Diagnostics.Process.Start(startInfo);
             }
             catch (Exception ex)
             {
-                Logger.Log($"Failed to open Snapshots folder: {ex.Message}", LogType.Error);
+                Logger.Log($"Failed to open Snapshots folder ('{_snapshotService.SnapshotsDirectory}'): {ex.Message}", LogType.Error);
             }
         }
 

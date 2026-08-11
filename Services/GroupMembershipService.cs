@@ -367,10 +367,12 @@ namespace EXOKit.Services
                     return;
                 }
             }
-            else
-            {
-                snapshotItems.Add(new SnapshotItem { User = userEmail, UserId = mgUserId, Role = role.ToString() });
-            }
+
+            // Always capture the "before" snapshot item ahead of attempting the removal, even when the
+            // pre-check reported the role as absent for a Distribution Group: that pre-check can be a
+            // false negative (see above), and if the removal below succeeds anyway, we still need the
+            // snapshot to exist so the change can be restored/undone later.
+            snapshotItems.Add(new SnapshotItem { User = userEmail, UserId = mgUserId, Role = role.ToString() });
 
             try
             {
@@ -407,16 +409,22 @@ namespace EXOKit.Services
                 {
                     Logger.Log($"    WARNING: Cannot remove the last owner from M365 Group '{groupEmail}'.", LogType.Warning);
                     statuses.Add("Owner (Skipped - Last Owner Cannot Remove)");
+                    snapshotItems.RemoveAll(si => si.Role == role.ToString() && string.Equals(si.User, userEmail, StringComparison.OrdinalIgnoreCase));
                 }
                 else if (IsNotFoundError(ex.Message))
                 {
                     Logger.Log($"    STATUS: {role} not found.", LogType.Warning);
                     statuses.Add($"{role} (Not Found)");
+                    // The removal genuinely didn't apply, so the speculative snapshot item captured above
+                    // (in case the pre-check was a false negative) doesn't reflect a real prior state and
+                    // must be removed to avoid a bogus restore entry.
+                    snapshotItems.RemoveAll(si => si.Role == role.ToString() && string.Equals(si.User, userEmail, StringComparison.OrdinalIgnoreCase));
                 }
                 else
                 {
                     Logger.Log($"    ERROR: Failed Remove {role}. DETAILS: {ex.Message}", LogType.Error);
                     statuses.Add($"{role} (Error)");
+                    snapshotItems.RemoveAll(si => si.Role == role.ToString() && string.Equals(si.User, userEmail, StringComparison.OrdinalIgnoreCase));
                 }
             }
         }
