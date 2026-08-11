@@ -213,13 +213,22 @@ namespace EXOKit.Services
             var objectSmtp = recipient?.PrimarySmtpAddress ?? mailboxIdentity;
             var recipientType = recipient?.RecipientTypeDetails ?? string.Empty;
 
-            return await BuildMailboxPermissionRowsAsync(mailboxIdentity, objectName, objectSmtp, recipientType);
+            // Use the resolved recipient Identity (not the raw, user-typed identity) when calling the
+            // REST-backed EXO permission cmdlets. Get-EXOMailboxPermission/Get-EXORecipientPermission
+            // resolve -Identity more strictly than legacy cmdlets, and per Microsoft's docs, a value that
+            // doesn't cleanly resolve causes the cmdlet to silently return *all* objects in the tenant
+            // instead of erroring - which looks exactly like an indefinite hang on large tenants.
+            return await BuildMailboxPermissionRowsAsync(recipient?.Identity ?? mailboxIdentity, objectName, objectSmtp, recipientType);
         }
 
         private async Task<List<ReportRow>> BuildMailboxPermissionRowsAsync(string mailboxIdentity, string objectName, string objectSmtp, string recipientType)
         {
             var rows = new List<ReportRow>();
 
+            // Stepwise progress logging (mirroring M365_Reporting_Tool.ps1's Update-Status calls before each
+            // permission-type lookup) so the log window shows exactly which call is in flight/slow, rather than
+            // a single opaque "Getting delegates..." line for all three REST calls.
+            Logger.Log("Getting Full Access permissions...");
             var fullAccess = await _exo.GetAllFullAccessDelegatesAsync(mailboxIdentity);
             rows.AddRange(fullAccess.Select(u => new ReportRow
             {
@@ -230,6 +239,7 @@ namespace EXOKit.Services
                 RoleOrPermission = "Full Access"
             }));
 
+            Logger.Log("Getting Send As permissions...");
             var sendAs = await _exo.GetAllSendAsDelegatesAsync(mailboxIdentity);
             rows.AddRange(sendAs.Select(u => new ReportRow
             {
@@ -240,6 +250,7 @@ namespace EXOKit.Services
                 RoleOrPermission = "Send As"
             }));
 
+            Logger.Log("Getting Send on Behalf permissions...");
             var sendOnBehalf = await _exo.GetAllSendOnBehalfDelegatesAsync(mailboxIdentity);
             rows.AddRange(sendOnBehalf.Select(u => new ReportRow
             {
