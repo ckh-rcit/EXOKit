@@ -26,6 +26,19 @@ namespace EXOKit.Services
         private readonly ServiceNowConfig _config;
         private static readonly HttpClient _httpClient = new();
 
+        // Reused across every ServiceNowService instance/call for the lifetime of the process (and
+        // persisted to disk across app restarts) so the user is only prompted to sign in once, rather
+        // than on every Save Settings click or ticket-close operation. InteractiveBrowserCredential
+        // silently reuses a cached token (or refreshes it) once one has been issued.
+        private static readonly InteractiveBrowserCredential _keyVaultCredential = new(
+            new InteractiveBrowserCredentialOptions
+            {
+                TokenCachePersistenceOptions = new TokenCachePersistenceOptions
+                {
+                    Name = "EXOKit.KeyVault"
+                }
+            });
+
         public ServiceNowService(ServiceNowConfig config)
         {
             _config = config;
@@ -33,8 +46,7 @@ namespace EXOKit.Services
 
         private async Task<string> GetKeyVaultSecretAsync(string vaultUrl, string secretName)
         {
-            var credential = new InteractiveBrowserCredential();
-            var client = new SecretClient(new Uri(vaultUrl), credential);
+            var client = new SecretClient(new Uri(vaultUrl), _keyVaultCredential);
             var secret = await client.GetSecretAsync(secretName);
             return secret.Value.Value;
         }
