@@ -11,6 +11,7 @@
     <UseWinUI>true</UseWinUI>
     <WinUISDKReferences>false</WinUISDKReferences>
     <EnableMsixTooling>true</EnableMsixTooling>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <Nullable>enable</Nullable>
     <ApplicationIcon>Assets\toolbox.ico</ApplicationIcon>
   </PropertyGroup>
@@ -44,7 +45,7 @@
     <PackageReference Include="Microsoft.Identity.Client" Version="4.87.0" />
     <PackageReference Include="Microsoft.PowerShell.SDK" Version="7.4.6" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2526" />
-    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.3.1" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260529003" />
   </ItemGroup>
 
   <ItemGroup>
