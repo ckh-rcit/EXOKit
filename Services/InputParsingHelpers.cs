@@ -45,7 +45,7 @@ namespace EXOKit.Services
             try
             {
                 var mailAddress = new MailAddress(value);
-                return mailAddress.Address == value;
+                return string.Equals(mailAddress.Address, value, StringComparison.OrdinalIgnoreCase);
             }
             catch (FormatException)
             {

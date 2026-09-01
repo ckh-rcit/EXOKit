@@ -174,13 +174,31 @@ namespace EXOKit.Services
                 foreach (var d in toAddSendAs)
                 {
                     Logger.Log($"Executing: Add-RecipientPermission -Identity '{identity}' -Trustee '{d}' -AccessRights SendAs");
-                    await _exo.AddSendAsDelegateAsync(identity, d);
+                    try
+                    {
+                        await _exo.AddSendAsDelegateAsync(identity, d);
+                    }
+                    catch (Exception ex) when (ex.Message.Contains("Object reference not set to an instance of an object", StringComparison.OrdinalIgnoreCase))
+                    {
+                        Logger.Log($"  Add Send As for '{d}' returned server error (Object reference not set). Retrying once...", LogType.Warning);
+                        await Task.Delay(2000);
+                        await _exo.AddSendAsDelegateAsync(identity, d);
+                    }
                 }
 
                 foreach (var d in toRemoveSendAs)
                 {
                     Logger.Log($"Executing: Remove-RecipientPermission -Identity '{identity}' -Trustee '{d}' -AccessRights SendAs");
-                    await _exo.RemoveSendAsDelegateAsync(identity, d);
+                    try
+                    {
+                        await _exo.RemoveSendAsDelegateAsync(identity, d);
+                    }
+                    catch (Exception ex) when (ex.Message.Contains("Object reference not set to an instance of an object", StringComparison.OrdinalIgnoreCase))
+                    {
+                        Logger.Log($"  Remove Send As for '{d}' returned server error (Object reference not set). Retrying once...", LogType.Warning);
+                        await Task.Delay(2000);
+                        await _exo.RemoveSendAsDelegateAsync(identity, d);
+                    }
                 }
 
                 Logger.Log($"Executing: Set-DistributionGroup -Identity '{identity}' -GrantSendOnBehalfTo ...");

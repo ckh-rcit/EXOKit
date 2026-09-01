@@ -107,29 +107,49 @@ namespace EXOKit.Services
             {
                 try
                 {
-                    switch (item.Role)
-                    {
-                        case "Full Access":
-                            await _exo.AddFullAccessAsync(targetIdentity, item.User);
-                            break;
-                        case "Send As":
-                            await _exo.AddSendAsAsync(targetIdentity, item.User);
-                            break;
-                        case "Send on Behalf":
-                            await _exo.AddSendOnBehalfAsync(targetIdentity, item.User);
-                            break;
-                        default:
-                            throw new InvalidOperationException($"Unknown permission role '{item.Role}'.");
-                    }
-
+                    await ApplyRestorePermissionAsync(targetIdentity, item.User, item.Role);
                     Logger.Log($"Restored {item.Role} for '{item.User}' on '{targetIdentity}'.", LogType.Success);
                     results.Add(new RestoreItemResult { User = item.User, Role = item.Role, Success = true, Message = "Restored" });
+                }
+                catch (Exception ex) when (ex.Message.Contains("Object reference not set to an instance of an object", StringComparison.OrdinalIgnoreCase))
+                {
+                    Logger.Log($"Restoring {item.Role} for '{item.User}' hit server error (Object reference not set). Retrying once...", LogType.Warning);
+                    await Task.Delay(2000);
+                    try
+                    {
+                        await ApplyRestorePermissionAsync(targetIdentity, item.User, item.Role);
+                        Logger.Log($"Restored {item.Role} for '{item.User}' on '{targetIdentity}'.", LogType.Success);
+                        results.Add(new RestoreItemResult { User = item.User, Role = item.Role, Success = true, Message = "Restored" });
+                    }
+                    catch (Exception retryEx)
+                    {
+                        Logger.Log($"Failed to restore {item.Role} for '{item.User}' on '{targetIdentity}'. DETAILS: {retryEx.Message}", LogType.Error);
+                        results.Add(new RestoreItemResult { User = item.User, Role = item.Role, Success = false, Message = retryEx.Message });
+                    }
                 }
                 catch (Exception ex)
                 {
                     Logger.Log($"Failed to restore {item.Role} for '{item.User}' on '{targetIdentity}'. DETAILS: {ex.Message}", LogType.Error);
                     results.Add(new RestoreItemResult { User = item.User, Role = item.Role, Success = false, Message = ex.Message });
                 }
+            }
+        }
+
+        private async Task ApplyRestorePermissionAsync(string targetIdentity, string user, string role)
+        {
+            switch (role)
+            {
+                case "Full Access":
+                    await _exo.AddFullAccessAsync(targetIdentity, user);
+                    break;
+                case "Send As":
+                    await _exo.AddSendAsAsync(targetIdentity, user);
+                    break;
+                case "Send on Behalf":
+                    await _exo.AddSendOnBehalfAsync(targetIdentity, user);
+                    break;
+                default:
+                    throw new InvalidOperationException($"Unknown permission role '{role}'.");
             }
         }
     }

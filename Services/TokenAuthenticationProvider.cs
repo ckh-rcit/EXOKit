@@ -28,6 +28,7 @@ namespace EXOKit.Services
             var token = await _authService.GetAccessTokenAsync(_scopes);
             if (!string.IsNullOrEmpty(token))
             {
+                request.Headers.Remove("Authorization");
                 request.Headers.Add("Authorization", $"Bearer {token}");
             }
         }

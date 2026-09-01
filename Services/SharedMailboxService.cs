@@ -169,6 +169,22 @@ namespace EXOKit.Services
                     result.Actions.Add($"{label} granted to {user}");
                     Logger.Log($"  {label} granted to '{user}'.");
                 }
+                catch (Exception ex) when (ex.Message.Contains("Object reference not set to an instance of an object", StringComparison.OrdinalIgnoreCase))
+                {
+                    Logger.Log($"  {label} for '{user}' returned server error (Object reference not set). Retrying once...", LogType.Warning);
+                    await Task.Delay(2000);
+                    try
+                    {
+                        await action(user);
+                        result.Actions.Add($"{label} granted to {user}");
+                        Logger.Log($"  {label} granted to '{user}'.");
+                    }
+                    catch (Exception retryEx)
+                    {
+                        Logger.Log($"  ERROR: Failed to grant {label} to '{user}'. DETAILS: {retryEx.Message}", LogType.Error);
+                        result.Actions.Add($"ERROR Granting {label} to {user}");
+                    }
+                }
                 catch (Exception ex)
                 {
                     Logger.Log($"  ERROR: Failed to grant {label} to '{user}'. DETAILS: {ex.Message}", LogType.Error);

@@ -234,6 +234,7 @@ namespace EXOKit.Services
                 ps.Runspace = _runspace;
                 ps.AddCommand("Get-EXOMailboxPermission").AddParameter("Identity", mailboxIdentity).AddParameter("ErrorAction", "SilentlyContinue");
                 var results = ps.Invoke();
+                CheckForNullReferenceServerError(ps);
                 foreach (var r in results)
                 {
                     var accessRights = r.Properties["AccessRights"]?.Value as IEnumerable<object>;
@@ -251,6 +252,7 @@ namespace EXOKit.Services
                 ps.Runspace = _runspace;
                 ps.AddCommand("Get-MailboxPermission").AddParameter("Identity", mailboxIdentity).AddParameter("User", userIdentity).AddParameter("ErrorAction", "SilentlyContinue");
                 var results = ps.Invoke();
+                CheckForNullReferenceServerError(ps);
                 foreach (var r in results)
                 {
                     var accessRights = r.Properties["AccessRights"]?.Value as IEnumerable<object>;
@@ -301,6 +303,7 @@ namespace EXOKit.Services
             ps.Runspace = _runspace;
             ps.AddCommand("Get-RecipientPermission").AddParameter("Identity", mailboxIdentity).AddParameter("Trustee", userIdentity).AddParameter("ErrorAction", "SilentlyContinue");
             var results = ps.Invoke();
+            CheckForNullReferenceServerError(ps);
             return results.Any(r =>
             {
                 var accessRights = r.Properties["AccessRights"]?.Value as IEnumerable<object>;
@@ -932,6 +935,7 @@ namespace EXOKit.Services
               .AddParameter("AccessRights", "SendAs")
               .AddParameter("ErrorAction", "SilentlyContinue");
             var results = ps.Invoke();
+            CheckForNullReferenceServerError(ps);
             return results
                 .Select(r => r.Properties["Trustee"]?.Value?.ToString())
                 .Where(v => !string.IsNullOrEmpty(v) && !string.Equals(v, "NT AUTHORITY\\SELF", StringComparison.OrdinalIgnoreCase))
@@ -1050,6 +1054,18 @@ namespace EXOKit.Services
         {
             var message = string.Join("; ", ps.Streams.Error.Select(e => e.ToString()));
             return new InvalidOperationException(string.IsNullOrWhiteSpace(message) ? "Unknown PowerShell pipeline error." : message);
+        }
+
+        private static void CheckForNullReferenceServerError(PowerShell ps)
+        {
+            if (ps.HadErrors)
+            {
+                var nreError = ps.Streams.Error.FirstOrDefault(e => e.ToString().Contains("Object reference not set to an instance of an object", StringComparison.OrdinalIgnoreCase));
+                if (nreError != null)
+                {
+                    throw new InvalidOperationException($"Write-ErrorMessage : {nreError}");
+                }
+            }
         }
 
         private void EnsureRunspaceOpen()
