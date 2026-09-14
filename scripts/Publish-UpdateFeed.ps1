@@ -28,7 +28,17 @@ $expectedIdentity = $expectedManifest.Package.Identity
 
 $response = Invoke-WebRequest -Uri $FeedUrl -SkipHttpErrorCheck -TimeoutSec 30
 if ($response.StatusCode -eq 200) {
-    [xml]$currentFeed = $response.Content
+    $currentFeed = [xml]::new()
+    if ($response.Content -is [byte[]]) {
+        $stream = [IO.MemoryStream]::new($response.Content)
+        try {
+            $currentFeed.Load($stream)
+        } finally {
+            $stream.Dispose()
+        }
+    } else {
+        $currentFeed.LoadXml($response.Content)
+    }
     $currentPackage = $currentFeed.AppInstaller.MainPackage
     if ($currentPackage.Name -cne $expectedIdentity.Name -or $currentPackage.Publisher -cne $expectedIdentity.Publisher) {
         throw 'The existing feed belongs to a different package family.'
