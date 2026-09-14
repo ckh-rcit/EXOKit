@@ -29,6 +29,8 @@ namespace EXOKit.Services
 
     public class GraphApiConfig
     {
+        public string ClientId { get; set; } = string.Empty;
+        public string TenantId { get; set; } = string.Empty;
         [JsonPropertyName("Scopes")]
         public List<string> Scopes { get; set; } = new();
     }
@@ -80,6 +82,8 @@ namespace EXOKit.Services
 
     public class SettingsConfig
     {
+        public bool ExoUseBrowserSignIn { get; set; }
+        public string UpdateFeedUrl { get; set; } = string.Empty;
         [JsonPropertyName("LicenseGroups")]
         public LicenseGroupsConfig LicenseGroups { get; set; } = new();
 
@@ -107,6 +111,15 @@ namespace EXOKit.Services
     /// </summary>
     public static class ConfigService
     {
+        public static ToolConfig CreateDefault() => new()
+        {
+            Settings = new SettingsConfig
+            {
+                LicenseGroups = new LicenseGroupsConfig { Bookings = new LicenseGroupConfig { GroupName = "License_M365_Bookings" } },
+                OwaPolicies = new OwaPoliciesConfig { BookingsCreators = "BookingsCreators" },
+                GraphApi = new GraphApiConfig { Scopes = new List<string> { "User.Read.All", "Group.ReadWrite.All" } }
+            }
+        };
         /// <summary>
         /// Returns a writable directory for config.json. MSIX-packaged installs run from a read-only
         /// location under Program Files\WindowsApps, so runtime edits (Settings page Save) must be
@@ -172,14 +185,18 @@ namespace EXOKit.Services
             var configPath = Path.Combine(directory, "config.json");
 
             var json = JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(configPath, json);
+            var temporaryPath = configPath + ".tmp";
+            File.WriteAllText(temporaryPath, json);
+            if (File.Exists(configPath)) File.Copy(configPath, configPath + ".bak", true);
+            File.Move(temporaryPath, configPath, true);
         }
 
         private static void Validate(ToolConfig config)
         {
             var missingFields = new List<string>();
 
-            if (string.IsNullOrWhiteSpace(config.Settings?.LicenseGroups?.Bookings?.GroupName))
+            if (string.IsNullOrWhiteSpace(config.Settings?.LicenseGroups?.Bookings?.GroupName)
+                && string.IsNullOrWhiteSpace(config.Settings?.LicenseGroups?.Bookings?.GroupId))
             {
                 missingFields.Add("Settings.LicenseGroups.Bookings.GroupName");
             }

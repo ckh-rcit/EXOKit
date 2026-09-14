@@ -133,23 +133,6 @@ namespace EXOKit.Services
                     await ValidatePendingChangesAsync(operationType, targetIdentity, validationQueue, userObjectMap, resultMap);
                 }
 
-                if (operationType == PermissionOperationType.Remove && snapshotItems.Count > 0)
-                {
-                    try
-                    {
-                        _snapshots.SaveSnapshot(new SnapshotRecord
-                        {
-                            OperationType = "MailboxPermissionRemoval",
-                            Target = targetIdentity,
-                            Description = $"Removed {snapshotItems.Count} permission(s) from {targetType} '{targetIdentity}'",
-                            Items = snapshotItems
-                        });
-                    }
-                    catch (Exception ex)
-                    {
-                        Logger.Log($"Failed to save permission removal snapshot for '{targetIdentity}'. DETAILS: {ex.Message}", LogType.Error);
-                    }
-                }
             }
 
             var summaryResults = resultMap.ToDictionary(
@@ -211,9 +194,7 @@ namespace EXOKit.Services
 
             try
             {
-                var hasFullAccess = await CheckPermissionStateSafeAsync(
-                    "Full Access",
-                    () => _exo.HasFullAccessAsync(targetIdentity, user, userObject));
+                var hasFullAccess = await _exo.HasFullAccessAsync(targetIdentity, user, userObject);
 
                 if (operationType == PermissionOperationType.Add)
                 {
@@ -224,7 +205,7 @@ namespace EXOKit.Services
                     }
                     else
                     {
-                        await AddFullAccessWithRetryAsync(targetIdentity, user, userObject);
+                        await _exo.AddFullAccessAsync(targetIdentity, user);
                         Logger.Log("Full Access add command submitted. Pending validation.");
                         statuses.Add("Full Access (Pending Validation)");
                         validationQueue.Add((user, "Full Access"));
@@ -232,15 +213,17 @@ namespace EXOKit.Services
                 }
                 else
                 {
+                    if (!hasFullAccess)
+                    {
+                        statuses.Add("Full Access (Not Found - No Change)");
+                        return;
+                    }
                     if (hasFullAccess)
                     {
                         snapshotItems.Add(new SnapshotItem { User = user, Role = "Full Access" });
+                        SaveBeforeRemoval(targetIdentity, user, "Full Access");
                     }
-                    await RunWithNullReferenceRetryAsync(
-                        "Full Access",
-                        () => _exo.RemoveFullAccessAsync(targetIdentity, user),
-                        () => _exo.HasFullAccessAsync(targetIdentity, user, userObject),
-                        expectPresentAfterSuccess: false);
+                    await _exo.RemoveFullAccessAsync(targetIdentity, user);
                     Logger.Log("Full Access remove command submitted. Pending validation.");
                     statuses.Add("Full Access (Pending Validation)");
                     validationQueue.Add((user, "Full Access"));
@@ -255,113 +238,14 @@ namespace EXOKit.Services
                 }
                 else if (IsNullReferenceServerError(ex.Message))
                 {
-                    // Even after RunWithNullReferenceRetryAsync's internal retry/verify, the lookup itself
-                    // can keep hitting the same Exchange Online server-side bug. Don't report a hard
-                    // failure here; defer to the post-batch validation pass, which polls for up to 10
-                    // seconds and will confirm/refute whether the change actually landed.
-                    Logger.Log($"Full Access {operationType} kept hitting the known Exchange Online server-side error. Deferring to post-batch validation.", LogType.Warning);
-                    statuses.Add("Full Access (Pending Validation)");
-                    validationQueue.Add((user, "Full Access"));
+                    Logger.Log($"Full Access {operationType} could not establish permission state after retries. Verify manually.", LogType.Warning);
+                    statuses.Add("Full Access (Unconfirmed - Read Failed)");
                 }
                 else
                 {
                     Logger.Log($"Failed to {operationType} Full Access. DETAILS: {ex.Message}", LogType.Error);
                     statuses.Add("Full Access (Error)");
                 }
-            }
-        }
-
-        /// <summary>
-        /// Add-MailboxPermission has a long-standing, Microsoft-acknowledged Exchange Online server-side
-        /// bug where the cmdlet's response-building code throws "Write-ErrorMessage : Object reference
-        /// not set to an instance of an object" even though the permission was actually granted (this is
-        /// especially common against Microsoft 365 Group mailboxes and newly-created shared mailboxes).
-        /// Rather than surfacing that as a hard failure, treat it as a transient/false-negative error:
-        /// re-check whether the permission actually landed, and only if it still isn't present after a
-        /// short pause do we retry the command once before giving up.
-        /// </summary>
-        private async Task AddFullAccessWithRetryAsync(string targetIdentity, string user, RecipientInfo userObject)
-        {
-            await RunWithNullReferenceRetryAsync(
-                "Full Access",
-                () => _exo.AddFullAccessAsync(targetIdentity, user),
-                () => _exo.HasFullAccessAsync(targetIdentity, user, userObject),
-                expectPresentAfterSuccess: true);
-        }
-
-        /// <summary>
-        /// Several EXO permission cmdlets (Add/Remove-MailboxPermission, Add/Remove-RecipientPermission)
-        /// share a long-standing, Microsoft-acknowledged server-side bug where the cmdlet's response-building
-        /// code throws "Write-ErrorMessage : Object reference not set to an instance of an object" even though
-        /// the change was actually applied (this is especially common against Microsoft 365 Group mailboxes
-        /// and newly-created shared mailboxes). Rather than surfacing that as a hard failure, treat it as a
-        /// transient/false-negative error: re-check whether the change actually landed, and only if it still
-        /// doesn't match the expected state after a short pause do we retry the command once before giving up.
-        /// </summary>
-        /// <param name="permissionLabel">Friendly name used only for logging (e.g. "Full Access", "Send As").</param>
-        /// <param name="action">The add/remove cmdlet invocation to run.</param>
-        /// <param name="checkPresent">Checks whether the permission is currently present.</param>
-        /// <param name="expectPresentAfterSuccess">True for Add (permission should now be present), false for Remove (permission should now be absent).</param>
-        private async Task RunWithNullReferenceRetryAsync(
-            string permissionLabel,
-            Func<Task> action,
-            Func<Task<bool>> checkPresent,
-            bool expectPresentAfterSuccess)
-        {
-            try
-            {
-                await action();
-                return;
-            }
-            catch (Exception ex) when (IsNullReferenceServerError(ex.Message))
-            {
-                Logger.Log($"{permissionLabel} returned a known Exchange Online server-side error (Write-ErrorMessage: Object reference not set). Checking whether the change was applied anyway...", LogType.Warning);
-
-                await Task.Delay(2000);
-                // Get-EXOMailboxPermission / Get-MailboxPermission / Get-RecipientPermission can hit this
-                // same server-side bug on the lookup itself, so this verification check needs the same
-                // safe-retry treatment as the initial pre-check, otherwise the NRE from checkPresent()
-                // escapes this method entirely and the caller sees a hard failure instead of a retry.
-                if (await CheckPermissionStateSafeAsync(permissionLabel, checkPresent) == expectPresentAfterSuccess)
-                {
-                    Logger.Log($"{permissionLabel} change was applied despite the server error. Continuing.", LogType.Success);
-                    return;
-                }
-
-                Logger.Log($"{permissionLabel} change was not applied yet. Retrying once...", LogType.Warning);
-                try
-                {
-                    await action();
-                }
-                catch (Exception retryEx) when (IsNullReferenceServerError(retryEx.Message))
-                {
-                    // The server sometimes throws this same error on a successful retry too; fall back to
-                    // verification instead of failing outright, and let the normal post-batch validation
-                    // step confirm/refute the final state.
-                    Logger.Log($"Retry hit the same Exchange Online server-side error for {permissionLabel}. Deferring to permission validation.", LogType.Warning);
-                }
-            }
-        }
-
-        /// <summary>
-        /// Get-EXOMailboxPermission / Get-MailboxPermission / Get-RecipientPermission can hit the same
-        /// Microsoft-side "Write-ErrorMessage : Object reference not set to an instance of an object"
-        /// server bug as the Add/Remove cmdlets, especially against Microsoft 365 Group-backed shared
-        /// mailboxes. When that happens on the pre-check, the exception previously escaped straight to
-        /// the outer catch and skipped the whole retry/verify path used for the actual Add/Remove call.
-        /// Retry the existence check itself once after a short pause instead of failing outright.
-        /// </summary>
-        private async Task<bool> CheckPermissionStateSafeAsync(string permissionLabel, Func<Task<bool>> checkPresent)
-        {
-            try
-            {
-                return await checkPresent();
-            }
-            catch (Exception ex) when (IsNullReferenceServerError(ex.Message))
-            {
-                Logger.Log($"{permissionLabel} lookup returned a known Exchange Online server-side error (Write-ErrorMessage: Object reference not set). Retrying lookup...", LogType.Warning);
-                await Task.Delay(2000);
-                return await checkPresent();
             }
         }
 
@@ -375,9 +259,7 @@ namespace EXOKit.Services
             Logger.Log($"Attempting {operationType} Send As...");
             try
             {
-                var existing = await CheckPermissionStateSafeAsync(
-                    "Send As",
-                    () => _exo.HasSendAsAsync(targetIdentity, user));
+                var existing = await _exo.HasSendAsAsync(targetIdentity, user);
 
                 if (operationType == PermissionOperationType.Add)
                 {
@@ -388,11 +270,7 @@ namespace EXOKit.Services
                     }
                     else
                     {
-                        await RunWithNullReferenceRetryAsync(
-                            "Send As",
-                            () => _exo.AddSendAsAsync(targetIdentity, user),
-                            () => _exo.HasSendAsAsync(targetIdentity, user),
-                            expectPresentAfterSuccess: true);
+                        await _exo.AddSendAsAsync(targetIdentity, user);
                         Logger.Log("Send As add command submitted. Pending validation.");
                         statuses.Add("Send As (Pending Validation)");
                         validationQueue.Add((user, "Send As"));
@@ -400,24 +278,15 @@ namespace EXOKit.Services
                 }
                 else
                 {
-                    // Always capture the "before" snapshot item ahead of attempting the removal, even when
-                    // the pre-check reported the permission as absent: that pre-check can be a false
-                    // negative (Get-RecipientPermission lags behind recent changes), and if the removal
-                    // below succeeds anyway, we still need the snapshot to exist so the change can be
-                    // restored/undone later.
+                    if (!existing)
+                    {
+                        statuses.Add("Send As (Not Found - No Change)");
+                        return;
+                    }
                     snapshotItems.Add(new SnapshotItem { User = user, Role = "Send As" });
+                    SaveBeforeRemoval(targetIdentity, user, "Send As");
 
-                    // Don't gate the actual removal on the pre-check result: Get-RecipientPermission can
-                    // lag behind a recent Add-RecipientPermission/Set-Mailbox change (Exchange Online's
-                    // Get-* cmdlets read from an eventually-consistent cache), which previously caused a
-                    // Send As permission that genuinely exists to be skipped entirely and misreported as
-                    // "Not Found". Always attempt the removal and let the cmdlet's own "wasn't found on
-                    // object" error (handled below) determine whether the permission truly doesn't exist.
-                    await RunWithNullReferenceRetryAsync(
-                        "Send As",
-                        () => _exo.RemoveSendAsAsync(targetIdentity, user),
-                        () => _exo.HasSendAsAsync(targetIdentity, user),
-                        expectPresentAfterSuccess: false);
+                    await _exo.RemoveSendAsAsync(targetIdentity, user);
                     Logger.Log("Send As remove command submitted. Pending validation.");
                     statuses.Add("Send As (Pending Validation)");
                     validationQueue.Add((user, "Send As"));
@@ -436,9 +305,8 @@ namespace EXOKit.Services
                 }
                 else if (IsNullReferenceServerError(ex.Message))
                 {
-                    Logger.Log($"Send As {operationType} kept hitting the known Exchange Online server-side error. Deferring to post-batch validation.", LogType.Warning);
-                    statuses.Add("Send As (Pending Validation)");
-                    validationQueue.Add((user, "Send As"));
+                    Logger.Log($"Send As {operationType} could not establish permission state after retries. Verify manually.", LogType.Warning);
+                    statuses.Add("Send As (Unconfirmed - Read Failed)");
                 }
                 else
                 {
@@ -479,17 +347,24 @@ namespace EXOKit.Services
             try
             {
                 var existingDelegates = await _exo.GetAllSendOnBehalfDelegatesAsync(targetIdentity);
-                foreach (var existingDelegate in existingDelegates)
+                var captured = new List<string>();
+                foreach (var requestedUser in sendOnBehalfList)
                 {
-                    if (sendOnBehalfList.Contains(existingDelegate, StringComparer.OrdinalIgnoreCase))
+                    var recipient = await _exo.GetRecipientAsync(requestedUser)
+                        ?? throw new InvalidOperationException($"Recipient '{requestedUser}' could not be resolved for snapshot.");
+                    if (existingDelegates.Contains(recipient.PrimarySmtpAddress ?? requestedUser, StringComparer.OrdinalIgnoreCase))
                     {
-                        snapshotItems.Add(new SnapshotItem { User = existingDelegate, Role = "Send on Behalf" });
+                        snapshotItems.Add(new SnapshotItem { User = requestedUser, Role = "Send on Behalf" });
+                        SaveBeforeRemoval(targetIdentity, requestedUser, "Send on Behalf");
+                        captured.Add(requestedUser);
                     }
                 }
+                sendOnBehalfList.RemoveAll(user => !captured.Contains(user, StringComparer.OrdinalIgnoreCase));
             }
             catch (Exception ex)
             {
                 Logger.Log($"Failed to capture Send on Behalf snapshot for '{targetIdentity}'. DETAILS: {ex.Message}", LogType.Warning);
+                throw;
             }
         }
 
@@ -566,13 +441,23 @@ namespace EXOKit.Services
                         continue;
                     }
 
-                    bool isPresent = item.Permission switch
+                    bool isPresent;
+                    try
                     {
+                        isPresent = item.Permission switch
+                        {
                         "Full Access" => await _exo.HasFullAccessAsync(targetIdentity, item.User, userObjectMap.GetValueOrDefault(item.User) ?? new RecipientInfo()),
                         "Send As" => await _exo.HasSendAsAsync(targetIdentity, item.User),
                         "Send on Behalf" => userObjectMap.TryGetValue(item.User, out var uo) && await _exo.HasSendOnBehalfAsync(targetIdentity, uo),
                         _ => false
-                    };
+                        };
+                    }
+                    catch (Exception exception)
+                    {
+                        Logger.Log($"Verification unavailable for '{item.User}': {exception.Message}", LogType.Warning);
+                        remaining.Add(item);
+                        continue;
+                    }
 
                     var isValidated = operationType == PermissionOperationType.Add ? isPresent : !isPresent;
                     if (isValidated)
@@ -622,6 +507,17 @@ namespace EXOKit.Services
                     statuses[i] = newValue;
                 }
             }
+        }
+
+        private void SaveBeforeRemoval(string target, string user, string role)
+        {
+            _snapshots.SaveSnapshot(new SnapshotRecord
+            {
+                OperationType = "MailboxPermissionRemoval",
+                Target = target,
+                Description = $"Before removing {role} for '{user}' from '{target}'",
+                Items = { new SnapshotItem { User = user, Role = role } }
+            });
         }
 
         private static bool IsNotFoundError(string message) =>

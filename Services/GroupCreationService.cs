@@ -79,6 +79,9 @@ namespace EXOKit.Services
 
         public async Task<GroupCreationResult> CreateGroupAsync(GroupCreationRequest request)
         {
+            if (request.GroupKind == GroupKind.M365 && request.CreateTeam && (!_graph.IsConnected
+                || !string.Equals(_graph.ConnectedTenantId, _exo.ConnectedTenantId, StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException("Connect Microsoft Graph to the EXO tenant before creating a group with a Team.");
             var result = new GroupCreationResult();
             var kindLabel = request.GroupKind == GroupKind.M365 ? "Microsoft 365 Group" : (request.IsSecurityGroup ? "Mail-Enabled Security Group" : "Distribution Group");
 
@@ -135,12 +138,9 @@ namespace EXOKit.Services
                     };
                     var departRestriction = request.DepartRestriction == GroupDepartRestriction.Closed ? "Closed" : "Open";
 
-                    // Mail-Enabled Security Groups only expose "require owner approval to join" (no open
-                    // join / no self-leave options in the admin center), which maps to ApprovalRequired /
-                    // Open vs Closed member join restriction, and members cannot self-remove either way.
                     if (request.IsSecurityGroup)
                     {
-                        joinRestriction = request.RequireOwnerApprovalToJoin ? "ApprovalRequired" : "Open";
+                        joinRestriction = "Closed";
                         departRestriction = "Closed";
                     }
 
@@ -160,14 +160,14 @@ namespace EXOKit.Services
                 return result;
             }
 
-            result.Success = true;
-            result.TicketSummary = BuildTicketSummary(request, kindLabel);
-            Logger.Log(result.TicketSummary, LogType.Ticket);
+            result.Success = !result.Actions.Any(action => action.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase));
+            result.TicketSummary = BuildTicketSummary(request, kindLabel, result);
+            foreach (var line in result.TicketSummary.Split(Environment.NewLine)) Logger.Log(line, LogType.Ticket);
             Logger.Log($"--- {kindLabel} Creation Complete ---");
             return result;
         }
 
-        private static string BuildTicketSummary(GroupCreationRequest request, string kindLabel)
+        private static string BuildTicketSummary(GroupCreationRequest request, string kindLabel, GroupCreationResult result)
         {
             var lines = new List<string>
             {
@@ -186,14 +186,14 @@ namespace EXOKit.Services
             if (request.GroupKind == GroupKind.M365)
             {
                 lines.Add($"Privacy: {(request.IsPrivate ? "Private" : "Public")}");
-                lines.Add($"Microsoft Teams: {(request.CreateTeam ? "Team Created" : "Not Created")}");
+                lines.Add($"Microsoft Teams: {(result.Actions.Contains("Team Created") ? "Team Created" : "Not Created")}");
             }
             else
             {
                 lines.Add($"Allow External Senders: {(request.AllowExternalSenders ? "Yes" : "No")}");
                 if (request.IsSecurityGroup)
                 {
-                    lines.Add($"Require Owner Approval to Join: {(request.RequireOwnerApprovalToJoin ? "Yes" : "No")}");
+                    lines.Add("Membership: Managed by owners (closed joining and leaving)");
                 }
                 else
                 {
@@ -202,6 +202,8 @@ namespace EXOKit.Services
                 }
             }
 
+            lines.AddRange(result.Actions);
+            if (!result.Success) lines.Add("PARTIAL COMPLETION: Group exists; retry only the failed steps.");
             lines.Add("---------------------");
             return string.Join(Environment.NewLine, lines);
         }

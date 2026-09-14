@@ -160,7 +160,7 @@ namespace EXOKit.Services
             var informational = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var failed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            var failurePattern = new Regex("Error|Verify Failed|User Not Found|Group Not Found|ID Error|Not Connected|Connection Required", RegexOptions.IgnoreCase);
+            var failurePattern = new Regex("Error|Unconfirmed|Pending|Not Supported|Verify Failed|User Not Found|Group Not Found|ID Error|Not Connected|Connection Required", RegexOptions.IgnoreCase);
             var informationalPattern = new Regex("Already Exists|Not Found|Skipped", RegexOptions.IgnoreCase);
 
             foreach (var userKey in results.Keys)

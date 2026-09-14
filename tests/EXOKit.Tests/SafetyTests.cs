@@ -1,0 +1,215 @@
+using EXOKit.Services;
+using Xunit;
+
+namespace EXOKit.Tests
+{
+    public sealed class SafetyTests : IDisposable
+    {
+        private readonly string _directory = Path.Combine(Path.GetTempPath(), "EXOKitTests", Guid.NewGuid().ToString("N"));
+        private const string Tenant = "11111111-1111-1111-1111-111111111111";
+        private static Task NoDelay() => Task.CompletedTask;
+        private static Exception ServerBug() => new InvalidOperationException("Write-ErrorMessage: Object reference not set to an instance of an object");
+
+        public SafetyTests() => Directory.CreateDirectory(_directory);
+        public void Dispose() => Directory.Delete(_directory, true);
+
+        [Fact]
+        public async Task UnknownInitialStateNeverMutates()
+        {
+            var mutations = 0;
+            var reads = 0;
+            await Assert.ThrowsAsync<InvalidOperationException>(() => PermissionVerification.ApplyAsync(
+                () => { mutations++; return Task.CompletedTask; },
+                () => { reads++; throw ServerBug(); }, false, NoDelay));
+            Assert.Equal(0, mutations);
+            Assert.Equal(3, reads);
+        }
+
+        [Fact]
+        public async Task ServerErrorAfterAppliedWriteIsVerifiedWithoutReplay()
+        {
+            var present = false;
+            var mutations = 0;
+            await PermissionVerification.ApplyAsync(
+                () => { mutations++; present = true; throw ServerBug(); },
+                () => Task.FromResult(present), true, NoDelay);
+            Assert.Equal(1, mutations);
+        }
+
+        [Fact]
+        public async Task SuccessfulButUnconfirmedWriteIsNotReplayed()
+        {
+            var mutations = 0;
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => PermissionVerification.ApplyAsync(
+                () => { mutations++; return Task.CompletedTask; },
+                () => Task.FromResult(false), true, NoDelay));
+            Assert.Contains("unconfirmed", exception.Message);
+            Assert.Equal(1, mutations);
+        }
+
+        [Fact]
+        public async Task PersistentServerErrorIsBoundedAndUnconfirmed()
+        {
+            var mutations = 0;
+            await Assert.ThrowsAsync<InvalidOperationException>(() => PermissionVerification.ApplyAsync(
+                () => { mutations++; throw ServerBug(); }, () => Task.FromResult(false), true, NoDelay));
+            Assert.Equal(2, mutations);
+        }
+
+        [Fact]
+        public async Task PermissionErrorsDoNotBecomeAbsence()
+        {
+            var reads = 0;
+            await Assert.ThrowsAsync<UnauthorizedAccessException>(() => PermissionVerification.ReadAsync<bool>(
+                () => { reads++; throw new UnauthorizedAccessException(); }, NoDelay));
+            Assert.Equal(1, reads);
+        }
+
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public async Task AlreadyDesiredStateDoesNotMutate(bool expected)
+        {
+            await PermissionVerification.ApplyAsync(() => throw new Exception("Unexpected mutation"), () => Task.FromResult(expected), expected, NoDelay);
+        }
+
+        [Fact]
+        public async Task CancelledReadDoesNotRetry()
+        {
+            await Assert.ThrowsAsync<OperationCanceledException>(() => PermissionVerification.ReadAsync<bool>(() => throw new OperationCanceledException(), NoDelay));
+        }
+
+        [Fact]
+        public void SnapshotIsAtomicAndTenantBound()
+        {
+            var service = new SnapshotService(_directory) { TenantIdProvider = () => Tenant };
+            var record = new SnapshotRecord
+            {
+                OperationType = "GroupDelegateRemoval", Target = "group@example.org",
+                Items = { new SnapshotItem { User = "user@example.org", Role = "Send As" } }
+            };
+            var path = service.SaveSnapshot(record);
+            var restored = service.LoadSnapshot(path)!;
+            Assert.Equal(Tenant, restored.Metadata["TenantId"]);
+            Assert.Single(restored.Items);
+            Assert.Empty(Directory.GetFiles(service.SnapshotsDirectory, "*.tmp"));
+        }
+
+        [Fact]
+        public void SnapshotWithoutTenantCannotBeSaved()
+        {
+            var service = new SnapshotService(_directory);
+            Assert.Throws<InvalidOperationException>(() => service.SaveSnapshot(new SnapshotRecord()));
+            Assert.False(Directory.Exists(service.SnapshotsDirectory));
+        }
+
+        [Fact]
+        public void InvalidConfigurationDoesNotReplaceWorkingFile()
+        {
+            var config = ConfigService.CreateDefault();
+            ConfigService.Save(config, _directory);
+            var path = Path.Combine(_directory, "config.json");
+            var previous = File.ReadAllText(path);
+            config.Settings.GraphApi.Scopes.Clear();
+            Assert.Throws<InvalidOperationException>(() => ConfigService.Save(config, _directory));
+            Assert.Equal(previous, File.ReadAllText(path));
+        }
+
+        [Theory]
+        [InlineData("GroupDelegateRemoval", "Send As")]
+        [InlineData("GroupDelegateRemoval", "Send on Behalf")]
+        [InlineData("MailboxPermissionRemoval", "Full Access")]
+        [InlineData("GroupMembershipRemoval", "Owner")]
+        public void SupportedRecoveryRolesValidate(string operation, string role)
+        {
+            var record = RecoveryRecord(operation, role);
+            SnapshotService.ValidateForRestore(record, Tenant);
+        }
+
+        [Theory]
+        [InlineData("Unknown", "Send As")]
+        [InlineData("GroupDelegateRemoval", "Full Access")]
+        [InlineData("GroupMembershipRemoval", "Unknown")]
+        public void UnsupportedRecoveryCannotReachMutation(string operation, string role)
+        {
+            Assert.Throws<InvalidOperationException>(() => SnapshotService.ValidateForRestore(RecoveryRecord(operation, role), Tenant));
+        }
+
+        [Fact]
+        public void LegacyOrCrossTenantRecoveryIsRejected()
+        {
+            var record = RecoveryRecord("GroupDelegateRemoval", "Send As");
+            Assert.Throws<InvalidOperationException>(() => SnapshotService.ValidateForRestore(record, Guid.NewGuid().ToString()));
+            record.Metadata.Clear();
+            Assert.Throws<InvalidOperationException>(() => SnapshotService.ValidateForRestore(record, Tenant));
+        }
+
+        [Fact]
+        public void EmptyRecoveryIsRejected()
+        {
+            var record = RecoveryRecord("GroupDelegateRemoval", "Send As");
+            record.Items.Clear();
+            Assert.Throws<InvalidOperationException>(() => SnapshotService.ValidateForRestore(record, Tenant));
+        }
+
+        private static SnapshotRecord RecoveryRecord(string operation, string role) => new()
+        {
+            OperationType = operation, Target = "group@example.org",
+            Metadata = { ["TenantId"] = Tenant },
+            Items = { new SnapshotItem { User = "user@example.org", Role = role } }
+        };
+
+        [Fact]
+        public void ConfigurationSaveBacksUpPreviousFile()
+        {
+            var path = Path.Combine(_directory, "config.json");
+            File.WriteAllText(path, "invalid prior configuration");
+            ConfigService.Save(ConfigService.CreateDefault(), _directory);
+            Assert.Equal("invalid prior configuration", File.ReadAllText(path + ".bak"));
+            Assert.NotNull(ConfigService.Load(_directory));
+        }
+
+        [Theory]
+        [InlineData("http://example.service-now.com/")]
+        [InlineData("https://user:password@example.service-now.com/")]
+        [InlineData("https://example.service-now.com/?redirect=bad")]
+        [InlineData("https://example.service-now.com/other")]
+        public void ServiceNowRejectsUnsafeEndpoint(string endpoint)
+        {
+            var config = SafeServiceNowConfig();
+            config.InstanceUrl = endpoint;
+            Assert.Throws<InvalidOperationException>(() => ServiceNowService.ValidateConfiguration(config));
+        }
+
+        [Fact]
+        public void ServiceNowRejectsQueryInjectionInField()
+        {
+            var config = SafeServiceNowConfig();
+            config.TicketNumberField = "number^ORactive";
+            Assert.Throws<InvalidOperationException>(() => ServiceNowService.ValidateConfiguration(config));
+        }
+
+        [Fact]
+        public async Task ServiceNowRejectsInjectedTicketBeforeCredentials()
+        {
+            var service = new ServiceNowService(SafeServiceNowConfig(), new GraphApiConfig());
+            var result = await service.CloseTaskAsync("TASK1^ORactive=true");
+            Assert.False(result.Success);
+            Assert.Equal("Invalid ticket number.", result.Message);
+        }
+
+        private static ServiceNowConfig SafeServiceNowConfig() => new()
+        {
+            Enabled = true, InstanceUrl = "https://example.service-now.com/", KeyVaultUrl = "https://example.vault.azure.net/"
+        };
+    }
+}
+
+namespace EXOKit.Services
+{
+    public enum LogType { Info, Warning }
+    public static class Logger
+    {
+        public static void Log(string message, LogType type = LogType.Info) { }
+    }
+}

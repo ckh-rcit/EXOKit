@@ -1,5 +1,7 @@
 {
   "Settings": {
+    "ExoUseBrowserSignIn": false,
+    "UpdateFeedUrl": "",
     "LicenseGroups": {
       "Bookings": {
         "GroupName": "License_M365_Bookings"
@@ -9,13 +11,10 @@
       "BookingsCreators": "BookingsCreators"
     },
     "GraphApi": {
+      "ClientId": "",
+      "TenantId": "",
       "Scopes": [
-        "Directory.Read.All",
-        "Directory.ReadWrite.All",
-        "Group.Read.All",
         "Group.ReadWrite.All",
-        "GroupMember.Read.All",
-        "GroupMember.ReadWrite.All",
         "User.Read.All"
       ]
     },

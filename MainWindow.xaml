@@ -14,10 +14,13 @@
         <MicaBackdrop />
     </Window.SystemBackdrop>
 
-    <Grid Padding="0" RequestedTheme="Dark">
+    <Grid x:Name="RootLayout" Padding="0" RequestedTheme="Dark">
         <Grid.RowDefinitions>
             <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
+        <Button x:Name="ButtonCancelOperation" Grid.Row="1" Content="Cancel Remaining Work" Visibility="Collapsed"
+                HorizontalAlignment="Right" Margin="12" Click="ButtonCancelOperation_Click" />
 
         <!-- Sidebar navigation (full height) + section content -->
         <NavigationView Grid.Row="0" x:Name="MainNavigationView"
@@ -49,7 +52,7 @@
                 <Border Grid.Row="0" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                         BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1"
                         CornerRadius="6" Padding="16,12" Margin="0,0,0,12">
-                    <StackPanel Orientation="Horizontal" Spacing="12">
+                    <StackPanel x:Name="ConnectionControls" Orientation="Horizontal" Spacing="12">
                         <Button x:Name="ButtonConnectExo" Content="Connect Exchange Online" Click="ButtonConnectExo_Click" />
                         <Button x:Name="ButtonConnectGraph" Content="Connect Microsoft Graph" Click="ButtonConnectGraph_Click" IsEnabled="False" />
                         <Button x:Name="ButtonDisconnect" Content="Disconnect All" Click="ButtonDisconnect_Click" />
@@ -58,7 +61,7 @@
                     </StackPanel>
                 </Border>
 
-                <Grid Grid.Row="1">
+                <Grid x:Name="OperationPanels" Grid.Row="1">
                 <!-- Mailboxes -->
                 <ScrollViewer x:Name="PanelMailboxes" Visibility="Visible">
                     <Grid ColumnSpacing="24" Padding="4">
@@ -271,6 +274,8 @@
                         </StackPanel>
 
                         <Button x:Name="ButtonCreateGroup" Content="Create Group" Click="ButtonCreateGroup_Click" />
+                        <TextBox x:Name="TextBoxExistingTeamGroup" Header="Existing Microsoft 365 Group Email or ID" />
+                        <Button Content="Resume Team Provisioning" Click="ButtonResumeTeam_Click" />
                     </StackPanel>
                 </ScrollViewer>
 
@@ -487,16 +492,27 @@
                 <ScrollViewer x:Name="PanelSettings" Visibility="Collapsed">
                     <StackPanel Spacing="8" Padding="8" MaxWidth="560" HorizontalAlignment="Left">
                         <TextBlock Text="App Settings" FontWeight="SemiBold" FontSize="16" />
+                        <CheckBox x:Name="CheckBoxExoBrowserSignIn" Content="Browser sign-in for Exchange (WAM compatibility)"
+                                  ToolTipService.ToolTip="Temporary workaround for WAM sign-in issues. Applies to the next EXO connection; Save Settings persists this choice." />
                         <TextBlock Text="Changes are saved to config.json and take effect immediately (no restart required)." Opacity="0.7" TextWrapping="Wrap" />
 
                         <TextBlock Text="Bookings License Group Name" Margin="0,8,0,0" />
                         <TextBox x:Name="TextBoxSettingsBookingsGroup" Width="420" HorizontalAlignment="Left" />
+                        <TextBox x:Name="TextBoxSettingsBookingsGroupId" Header="Bookings Group Object ID (Optional)" Width="420" HorizontalAlignment="Left" />
 
                         <TextBlock Text="Bookings Creators OWA Policy Name" />
                         <TextBox x:Name="TextBoxSettingsOwaPolicy" Width="420" HorizontalAlignment="Left" />
 
                         <TextBlock Text="Microsoft Graph API Scopes (one per line)" />
                         <TextBox x:Name="TextBoxSettingsGraphScopes" AcceptsReturn="True" Height="100" Width="420" TextWrapping="Wrap" HorizontalAlignment="Left" />
+                        <TextBlock Text="EXOKit Application (Client) ID" />
+                        <TextBox x:Name="TextBoxSettingsClientId" Width="420" HorizontalAlignment="Left" />
+                        <TextBlock Text="Directory (Tenant) ID" />
+                        <TextBox x:Name="TextBoxSettingsTenantId" Width="420" HorizontalAlignment="Left" />
+                        <TextBlock Text="Update Feed URL (.appinstaller)" />
+                        <TextBox x:Name="TextBoxSettingsUpdateFeed" Width="420" HorizontalAlignment="Left" />
+                        <Button Content="Check for Updates" Click="ButtonCheckUpdates_Click" HorizontalAlignment="Left" />
+                        <TextBlock x:Name="TextBlockVersion" />
 
                         <TextBlock Text="ServiceNow Integration" FontWeight="SemiBold" Margin="0,8,0,0" />
                         <CheckBox x:Name="CheckBoxSettingsServiceNowEnabled" Content="Enabled" />
@@ -534,9 +550,9 @@
                         <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8">
                             <TextBlock Text="ServiceNow Task/Inc #:" VerticalAlignment="Center" Opacity="0.85" />
                             <TextBox x:Name="TextBoxServiceNowTicketNumber" Width="160"
-                                     ToolTipService.ToolTip="Optional: enter the ServiceNow task or incident number (e.g. TASK0012345). If provided and ServiceNow is enabled in Settings, the ticket will be updated and closed automatically when the next ticket notes are generated." />
+                                     ToolTipService.ToolTip="Optional ticket number. Verified mailbox/group role operations offer closure after you review the notes." />
                             <CheckBox x:Name="CheckBoxShowWarnings" Content="Show Warnings" VerticalAlignment="Center" Checked="CheckBoxShowWarnings_Changed" Unchecked="CheckBoxShowWarnings_Changed"
-                                      ToolTipService.ToolTip="Warnings (e.g. benign Exchange Online replication warnings) are hidden from the log by default. Check this to display them." />
+                                      IsChecked="True" ToolTipService.ToolTip="Show warnings, including unconfirmed changes." />
                         </StackPanel>
                         <Button Grid.Column="1" x:Name="ButtonToggleOutputCollapse" Click="ButtonToggleOutputCollapse_Click"
                                 Padding="4" MinWidth="0" Background="Transparent" BorderThickness="0"

@@ -85,9 +85,32 @@ namespace EXOKit.Services
         }
 
         public string SnapshotsDirectory => _snapshotsDirectory;
+        public Func<string?>? TenantIdProvider { get; set; }
+
+        public static void ValidateForRestore(SnapshotRecord record, string? connectedTenantId)
+        {
+            if (!record.Metadata.TryGetValue("TenantId", out var tenantId) || !Guid.TryParse(tenantId, out _))
+                throw new InvalidOperationException("This legacy snapshot has no verified tenant. Review and restore it manually.");
+            if (!string.Equals(tenantId, connectedTenantId, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Snapshot tenant does not match the connected tenant.");
+            if (record.Items.Count == 0 || string.IsNullOrWhiteSpace(record.Target))
+                throw new InvalidOperationException("Snapshot has no restorable items or target.");
+            var roles = record.OperationType switch
+            {
+                "MailboxPermissionRemoval" => new[] { "Full Access", "Send As", "Send on Behalf" },
+                "GroupDelegateRemoval" => new[] { "Send As", "Send on Behalf" },
+                "GroupMembershipRemoval" => new[] { "Member", "Owner" },
+                _ => throw new InvalidOperationException($"Unsupported snapshot type '{record.OperationType}'.")
+            };
+            if (record.Items.Any(item => string.IsNullOrWhiteSpace(item.User) || !roles.Contains(item.Role)))
+                throw new InvalidOperationException("Snapshot contains an unsupported role or missing recipient.");
+        }
 
         public string SaveSnapshot(SnapshotRecord record)
         {
+            var tenantId = TenantIdProvider?.Invoke();
+            if (!Guid.TryParse(tenantId, out _)) throw new InvalidOperationException("A verified tenant is required before saving a recovery snapshot.");
+            record.Metadata["TenantId"] = tenantId!;
             Directory.CreateDirectory(_snapshotsDirectory);
 
             var safeTarget = SanitizeForFileName(record.Target);
@@ -95,7 +118,13 @@ namespace EXOKit.Services
             var filePath = Path.Combine(_snapshotsDirectory, fileName);
 
             var json = JsonSerializer.Serialize(record, SerializerOptions);
-            File.WriteAllText(filePath, json);
+            var temporaryPath = filePath + ".tmp";
+            using (var stream = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                stream.Write(System.Text.Encoding.UTF8.GetBytes(json));
+                stream.Flush(true);
+            }
+            File.Move(temporaryPath, filePath);
 
             record.FilePath = filePath;
             Logger.Log($"Snapshot saved: {fileName}");

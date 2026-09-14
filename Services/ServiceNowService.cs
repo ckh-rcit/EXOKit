@@ -3,6 +3,8 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
+using System.Linq;
 using System.Threading.Tasks;
 using Azure.Identity;
 using Azure.Security.KeyVault.Secrets;
@@ -24,30 +26,29 @@ namespace EXOKit.Services
     public class ServiceNowService
     {
         private readonly ServiceNowConfig _config;
-        private static readonly HttpClient _httpClient = new();
+        private static readonly HttpClient _httpClient = new(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(60) };
 
-        // Reused across every ServiceNowService instance/call for the lifetime of the process (and
-        // persisted to disk across app restarts) so the user is only prompted to sign in once, rather
-        // than on every Save Settings click or ticket-close operation. InteractiveBrowserCredential
-        // silently reuses a cached token (or refreshes it) once one has been issued.
-        private static readonly InteractiveBrowserCredential _keyVaultCredential = new(
-            new InteractiveBrowserCredentialOptions
-            {
-                TokenCachePersistenceOptions = new TokenCachePersistenceOptions
-                {
-                    Name = "EXOKit.KeyVault"
-                }
-            });
+        private readonly InteractiveBrowserCredential? _keyVaultCredential;
 
-        public ServiceNowService(ServiceNowConfig config)
+        public ServiceNowService(ServiceNowConfig config, GraphApiConfig authentication)
         {
             _config = config;
+            if (Guid.TryParse(authentication.ClientId, out _) && Guid.TryParse(authentication.TenantId, out _))
+                _keyVaultCredential = new InteractiveBrowserCredential(new InteractiveBrowserCredentialOptions
+                {
+                    ClientId = authentication.ClientId,
+                    TenantId = authentication.TenantId,
+                    RedirectUri = new Uri("http://localhost"),
+                    TokenCachePersistenceOptions = new TokenCachePersistenceOptions { Name = $"EXOKit.KeyVault.{authentication.TenantId}.{authentication.ClientId}" }
+                });
         }
 
         private async Task<string> GetKeyVaultSecretAsync(string vaultUrl, string secretName)
         {
+            if (_keyVaultCredential == null) throw new InvalidOperationException("Configure the EXOKit app registration and tenant before using Key Vault.");
             var client = new SecretClient(new Uri(vaultUrl), _keyVaultCredential);
-            var secret = await client.GetSecretAsync(secretName);
+            using var timeout = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(5));
+            var secret = await client.GetSecretAsync(secretName, cancellationToken: timeout.Token);
             return secret.Value.Value;
         }
 
@@ -58,18 +59,20 @@ namespace EXOKit.Services
         /// </summary>
         public async Task<ServiceNowResult> TestConnectionAsync()
         {
+            try { ValidateConfiguration(_config); }
+            catch (Exception exception) { return new ServiceNowResult { Message = exception.Message }; }
             if (string.IsNullOrWhiteSpace(_config.InstanceUrl) || string.IsNullOrWhiteSpace(_config.KeyVaultUrl) ||
                 string.IsNullOrWhiteSpace(_config.UsernameSecretName) || string.IsNullOrWhiteSpace(_config.PasswordSecretName))
             {
                 return new ServiceNowResult { Success = false, Message = "Instance URL, Key Vault URL, Username Secret Name, and Password Secret Name are all required." };
             }
 
-            if (!Uri.TryCreate(_config.InstanceUrl, UriKind.Absolute, out var instanceUri) || (instanceUri.Scheme != Uri.UriSchemeHttp && instanceUri.Scheme != Uri.UriSchemeHttps))
+            if (!Uri.TryCreate(_config.InstanceUrl, UriKind.Absolute, out var instanceUri) || instanceUri.Scheme != Uri.UriSchemeHttps)
             {
                 return new ServiceNowResult { Success = false, Message = $"Instance URL '{_config.InstanceUrl}' is not a valid absolute http(s) URL." };
             }
 
-            if (!Uri.TryCreate(_config.KeyVaultUrl, UriKind.Absolute, out var keyVaultUri) || (keyVaultUri.Scheme != Uri.UriSchemeHttp && keyVaultUri.Scheme != Uri.UriSchemeHttps))
+            if (!Uri.TryCreate(_config.KeyVaultUrl, UriKind.Absolute, out var keyVaultUri) || keyVaultUri.Scheme != Uri.UriSchemeHttps)
             {
                 return new ServiceNowResult { Success = false, Message = $"Key Vault URL '{_config.KeyVaultUrl}' is not a valid absolute http(s) URL." };
             }
@@ -132,6 +135,12 @@ namespace EXOKit.Services
 
         public async Task<ServiceNowResult> CloseTaskAsync(string ticketNumber, string workNotes = "", string additionalComments = "")
         {
+            try
+            {
+                ValidateConfiguration(_config);
+                if (!Regex.IsMatch(ticketNumber, @"\A[A-Za-z0-9_-]{1,64}\z")) throw new InvalidOperationException("Invalid ticket number.");
+            }
+            catch (Exception exception) { return new ServiceNowResult { Message = exception.Message }; }
             if (!_config.Enabled)
             {
                 return new ServiceNowResult { Success = false, Message = "ServiceNow integration is not enabled in config." };
@@ -162,7 +171,8 @@ namespace EXOKit.Services
             string sysId, sysClass;
             try
             {
-                var lookupUrl = $"{instanceUrl}/api/now/table/{table}?sysparm_query={numField}={ticketNumber}&sysparm_fields=sys_id,number,sys_class_name&sysparm_limit=1";
+                var query = Uri.EscapeDataString($"{numField}={ticketNumber}");
+                var lookupUrl = $"{instanceUrl}/api/now/table/{table}?sysparm_query={query}&sysparm_fields=sys_id,{numField},sys_class_name&sysparm_limit=2";
                 using var lookupRequest = new HttpRequestMessage(HttpMethod.Get, lookupUrl);
                 lookupRequest.Headers.Authorization = new AuthenticationHeaderValue("Basic", encodedCreds);
                 lookupRequest.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
@@ -178,6 +188,8 @@ namespace EXOKit.Services
                 }
 
                 var record = resultArray[0];
+                if (resultArray.GetArrayLength() != 1 || !string.Equals(GetFieldValue(record, numField), ticketNumber, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Ticket lookup was ambiguous or did not match the requested number.");
                 sysId = GetFieldValue(record, "sys_id");
                 sysClass = GetFieldValue(record, "sys_class_name");
             }
@@ -194,6 +206,7 @@ namespace EXOKit.Services
 
             try
             {
+                if (!Regex.IsMatch(sysId, @"\A[a-fA-F0-9]{32}\z") || !IsIdentifier(updateTable)) throw new InvalidOperationException("Invalid ServiceNow update target.");
                 var updatePayload = new System.Collections.Generic.Dictionary<string, object?>
                 {
                     [stateField] = stateValue,
@@ -205,11 +218,12 @@ namespace EXOKit.Services
                 {
                     foreach (var field in _config.AdditionalFields)
                     {
+                        if (updatePayload.ContainsKey(field.Key)) throw new InvalidOperationException("AdditionalFields cannot override closure state or notes.");
                         updatePayload[field.Key] = field.Value;
                     }
                 }
 
-                var updateUrl = $"{instanceUrl}/api/now/table/{updateTable}/{sysId}";
+                var updateUrl = $"{instanceUrl}/api/now/table/{updateTable}/{sysId}?sysparm_display_value=false&sysparm_fields=sys_id,{stateField}";
                 using var updateRequest = new HttpRequestMessage(new HttpMethod("PATCH"), updateUrl);
                 updateRequest.Headers.Authorization = new AuthenticationHeaderValue("Basic", encodedCreds);
                 updateRequest.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
@@ -217,6 +231,9 @@ namespace EXOKit.Services
 
                 using var updateResponse = await _httpClient.SendAsync(updateRequest);
                 updateResponse.EnsureSuccessStatusCode();
+                using var updated = JsonDocument.Parse(await updateResponse.Content.ReadAsStringAsync());
+                if (!updated.RootElement.TryGetProperty("result", out var updatedRecord) || GetFieldValue(updatedRecord, stateField) != stateValue)
+                    return new ServiceNowResult { Message = $"Ticket '{ticketNumber}' update was submitted, but closure state is unconfirmed. Verify it in ServiceNow." };
 
                 return new ServiceNowResult { Success = true, Message = $"Ticket '{ticketNumber}' updated and closed successfully." };
             }
@@ -234,6 +251,24 @@ namespace EXOKit.Services
                 return valueProp.GetString() ?? string.Empty;
             }
             return field.GetString() ?? string.Empty;
+        }
+
+        private static bool IsIdentifier(string value) => Regex.IsMatch(value, @"\A[a-zA-Z_][a-zA-Z0-9_]*\z");
+
+        public static void ValidateConfiguration(ServiceNowConfig config)
+        {
+            foreach (var endpoint in new[] { config.InstanceUrl, config.KeyVaultUrl })
+            {
+                if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var uri) || uri.Scheme != "https" || !string.IsNullOrEmpty(uri.UserInfo)
+                    || !string.IsNullOrEmpty(uri.Query) || !string.IsNullOrEmpty(uri.Fragment) || uri.AbsolutePath != "/")
+                    throw new InvalidOperationException("ServiceNow and Key Vault require HTTPS origin URLs without credentials, paths or queries.");
+            }
+            if (!new Uri(config.KeyVaultUrl).Host.EndsWith(".vault.azure.net", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Key Vault must use an Azure public-cloud vault endpoint.");
+            var fields = new[] { config.Table, config.TicketNumberField, config.CloseStateField, config.WorkNotesField, config.AdditionalCommentsField };
+            if (fields.Any(field => !IsIdentifier(field)) || (!string.IsNullOrEmpty(config.UpdateTable) && !IsIdentifier(config.UpdateTable))
+                || config.AdditionalFields?.Keys.Any(field => !IsIdentifier(field)) == true)
+                throw new InvalidOperationException("ServiceNow table and field names must be valid API identifiers.");
         }
     }
 }

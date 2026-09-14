@@ -131,6 +131,11 @@ namespace EXOKit.Services
                 try
                 {
                     await _exo.AddSendOnBehalfBatchAsync(request.Email, request.SendOnBehalfUsers);
+                    foreach (var user in request.SendOnBehalfUsers)
+                    {
+                        var recipient = await _exo.GetRecipientAsync(user) ?? throw new InvalidOperationException($"Recipient '{user}' could not be resolved.");
+                        await PermissionVerification.ApplyAsync(() => Task.CompletedTask, () => _exo.HasSendOnBehalfAsync(request.Email, recipient), true);
+                    }
                     result.Actions.Add($"Send on Behalf granted to {request.SendOnBehalfUsers.Length} user(s)");
                     foreach (var u in request.SendOnBehalfUsers)
                     {
@@ -144,7 +149,7 @@ namespace EXOKit.Services
                 }
             }
 
-            result.Success = true;
+            result.Success = !result.Actions.Any(action => action.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase));
             result.TicketSummary = BuildTicketSummary(request, result);
 
             Logger.Log("--- For IT Ticket ---", LogType.Ticket);
@@ -202,12 +207,8 @@ namespace EXOKit.Services
                 $"  Email: {request.Email}"
             };
 
-            if (!string.IsNullOrWhiteSpace(request.Department)) lines.Add($"  Department: {request.Department}");
-            if (request.EnableArchive) lines.Add("  Archive: Enabled");
-            if (request.HideFromAddressLists) lines.Add("  Hidden From GAL: Yes");
-            if (request.FullAccessUsers.Length > 0) lines.Add($"  Full Access: {string.Join(", ", request.FullAccessUsers)}");
-            if (request.SendAsUsers.Length > 0) lines.Add($"  Send As: {string.Join(", ", request.SendAsUsers)}");
-            if (request.SendOnBehalfUsers.Length > 0) lines.Add($"  Send on Behalf: {string.Join(", ", request.SendOnBehalfUsers)}");
+            lines.AddRange(result.Actions);
+            if (!result.Success) lines.Add("PARTIAL COMPLETION: Mailbox exists; resolve failed steps without recreating it.");
 
             return string.Join(Environment.NewLine, lines);
         }

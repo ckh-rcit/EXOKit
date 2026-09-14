@@ -13,23 +13,24 @@ namespace EXOKit.Services
     /// </summary>
     public class AuthService
     {
-        // Microsoft Graph PowerShell well-known public client ID (multi-tenant, pre-registered redirect URIs).
-        private const string ClientId = "14d82eec-204b-4c2f-b7e8-296a70dab67e";
-        private const string Authority = "https://login.microsoftonline.com/organizations";
-
         private readonly string[] _graphScopes;
-        private readonly IPublicClientApplication _app;
+        private readonly IPublicClientApplication? _app;
+        private readonly string _tenantId;
+        public string? ConnectedTenantId { get; private set; }
+        public System.Threading.CancellationToken OperationCancellationToken { get; set; }
         private readonly Func<IntPtr> _parentWindowHandleProvider;
 
         public bool IsGraphConnected { get; private set; }
         public string? ConnectedUser { get; private set; }
 
-        public AuthService(string[] graphScopes, Func<IntPtr> parentWindowHandleProvider)
+        public AuthService(string[] graphScopes, Func<IntPtr> parentWindowHandleProvider, string clientId, string tenantId)
         {
+            _tenantId = tenantId;
             _graphScopes = graphScopes;
             _parentWindowHandleProvider = parentWindowHandleProvider;
-            _app = PublicClientApplicationBuilder.Create(ClientId)
-                .WithAuthority(Authority)
+            if (!Guid.TryParse(clientId, out _) || !Guid.TryParse(tenantId, out _)) return;
+            _app = PublicClientApplicationBuilder.Create(clientId)
+                .WithAuthority($"https://login.microsoftonline.com/{tenantId}")
                 .WithDefaultRedirectUri()
                 .Build();
         }
@@ -43,6 +44,9 @@ namespace EXOKit.Services
                 IsGraphConnected = result != null;
                 if (result != null)
                 {
+                    if (!string.Equals(result.TenantId, _tenantId, StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException("Graph token tenant does not match the configured tenant.");
+                    ConnectedTenantId = result.TenantId;
                     ConnectedUser = result.Account?.Username;
                     Logger.Log($"Connected to Microsoft Graph as {ConnectedUser}.", LogType.Success);
                 }
@@ -50,6 +54,7 @@ namespace EXOKit.Services
             }
             catch (Exception ex)
             {
+                IsGraphConnected = false;
                 Logger.Log($"Graph connection failed: {ex.Message}", LogType.Error);
                 return false;
             }
@@ -59,47 +64,61 @@ namespace EXOKit.Services
         {
             try
             {
-                var accounts = await _app.GetAccountsAsync();
+                var accounts = _app == null ? Array.Empty<IAccount>() : await _app.GetAccountsAsync();
                 foreach (var account in accounts)
                 {
-                    await _app.RemoveAsync(account);
+                    await _app!.RemoveAsync(account);
                 }
                 IsGraphConnected = false;
                 ConnectedUser = null;
+                ConnectedTenantId = null;
                 Logger.Log("Disconnected from Microsoft Graph.");
             }
             catch (Exception ex)
             {
                 Logger.Log($"Graph disconnect error: {ex.Message}", LogType.Error);
             }
+            finally
+            {
+                IsGraphConnected = false;
+                ConnectedUser = null;
+                ConnectedTenantId = null;
+            }
         }
 
-        public async Task<string?> GetAccessTokenAsync(string[]? scopes = null)
+        public async Task<string?> GetAccessTokenAsync(string[]? scopes = null, string? claims = null, System.Threading.CancellationToken cancellationToken = default)
         {
-            var result = await AcquireTokenAsync(scopes ?? _graphScopes);
+            OperationCancellationToken.ThrowIfCancellationRequested();
+            if (!IsGraphConnected) throw new InvalidOperationException("Connect Microsoft Graph first.");
+            var result = await AcquireTokenAsync(scopes ?? _graphScopes, claims, cancellationToken);
+            if (!string.Equals(result?.TenantId, _tenantId, StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Graph token tenant mismatch.");
             return result?.AccessToken;
         }
 
-        private async Task<AuthenticationResult?> AcquireTokenAsync(string[] scopes)
+        private async Task<AuthenticationResult?> AcquireTokenAsync(string[] scopes, string? claims = null, System.Threading.CancellationToken cancellationToken = default)
         {
+            using var timeout = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(OperationCancellationToken, cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromMinutes(5));
+            if (_app == null) throw new InvalidOperationException("Configure an EXOKit-owned Graph ClientId and TenantId in Settings first.");
             var accounts = await _app.GetAccountsAsync();
             var account = accounts.FirstOrDefault();
 
-            if (account != null)
+            if (account != null && string.IsNullOrWhiteSpace(claims))
             {
                 try
                 {
-                    return await _app.AcquireTokenSilent(scopes, account).ExecuteAsync();
+                    return await _app.AcquireTokenSilent(scopes, account).ExecuteAsync(timeout.Token);
                 }
-                catch (MsalUiRequiredException)
+                catch (MsalUiRequiredException exception)
                 {
-                    // Fall through to interactive - additional scope consent likely required.
+                    claims = exception.Claims;
                 }
             }
 
             return await _app.AcquireTokenInteractive(scopes)
+                .WithClaims(claims)
                 .WithParentActivityOrWindow(_parentWindowHandleProvider())
-                .ExecuteAsync();
+                .ExecuteAsync(timeout.Token);
         }
     }
 }

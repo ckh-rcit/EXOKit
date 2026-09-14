@@ -38,10 +38,11 @@ namespace EXOKit.Services
     /// </summary>
     public class GroupSettingsService
     {
-        private static readonly string[] SupportedDistributionGroupTypes = { "MailUniversalDistributionGroup", "MailNonUniversalGroup" };
+        private static readonly string[] SupportedDistributionGroupTypes = { "MailUniversalDistributionGroup", "MailNonUniversalGroup", "MailUniversalSecurityGroup" };
 
         private readonly ExoPowerShellService _exo;
         private readonly SnapshotService _snapshots;
+        private readonly Dictionary<string, GroupSettingsSnapshot> _loaded = new(StringComparer.OrdinalIgnoreCase);
 
         public GroupSettingsService(ExoPowerShellService exo, SnapshotService? snapshots = null)
         {
@@ -89,20 +90,47 @@ namespace EXOKit.Services
             var snapshot = new GroupSettingsSnapshot
             {
                 AllowExternalSenders = !settings.RequireSenderAuthenticationEnabled,
-                SpecifiedSenders = settings.AcceptMessagesOnlyFromSendersOrMembers,
-                SendAsDelegates = sendAsDelegates.ToArray(),
-                SendOnBehalfDelegates = settings.GrantSendOnBehalfTo,
+                SpecifiedSenders = await _exo.ResolveRecipientAddressesAsync(settings.AcceptMessagesOnlyFromSendersOrMembers),
+                SendAsDelegates = await _exo.ResolveRecipientAddressesAsync(sendAsDelegates),
+                SendOnBehalfDelegates = await _exo.ResolveRecipientAddressesAsync(settings.GrantSendOnBehalfTo),
                 RequireModeratorApproval = settings.ModerationEnabled,
-                Moderators = settings.ModeratedBy,
-                BypassModerationSenders = settings.BypassModerationFromSendersOrMembers,
+                Moderators = await _exo.ResolveRecipientAddressesAsync(settings.ModeratedBy),
+                BypassModerationSenders = await _exo.ResolveRecipientAddressesAsync(settings.BypassModerationFromSendersOrMembers),
                 NotifySenderMode = settings.SendModerationNotifications,
                 JoinRestriction = settings.MemberJoinRestriction,
                 DepartRestriction = settings.MemberDepartRestriction
             };
 
             Logger.Log($"  SUCCESS: Loaded settings for '{identity}'.", LogType.Success);
+            _loaded[identity] = snapshot;
             return snapshot;
         }
+
+        private async Task EnsureUnchangedAsync(string identity)
+        {
+            if (!_loaded.TryGetValue(identity, out var loaded)) throw new InvalidOperationException("Load the group's settings before saving.");
+            var current = await LoadSettingsAsync(identity) ?? throw new InvalidOperationException("Group settings unavailable.");
+            if (System.Text.Json.JsonSerializer.Serialize(loaded) != System.Text.Json.JsonSerializer.Serialize(current))
+            {
+                _loaded.Remove(identity);
+                throw new InvalidOperationException("Group settings changed since loading. Reload and review before saving.");
+            }
+        }
+
+        private async Task VerifySettingsAsync(string identity, Func<GroupSettingsSnapshot, bool> matches)
+        {
+            for (var attempt = 0; attempt < 15; attempt++)
+            {
+                var current = await LoadSettingsAsync(identity);
+                if (current != null && matches(current)) return;
+                await Task.Delay(TimeSpan.FromSeconds(2));
+            }
+            _loaded.Remove(identity);
+            throw new InvalidOperationException("Settings change is unconfirmed. Reload and verify before retrying.");
+        }
+
+        private static bool SameSet(IEnumerable<string> first, IEnumerable<string> second) =>
+            new HashSet<string>(first, StringComparer.OrdinalIgnoreCase).SetEquals(second);
 
         public async Task<bool> SaveDeliveryManagementAsync(string identity, bool allowExternalSenders, string[] specifiedSenders)
         {
@@ -111,7 +139,10 @@ namespace EXOKit.Services
             try
             {
                 Logger.Log($"Executing: Set-DistributionGroup -Identity '{identity}' -RequireSenderAuthenticationEnabled {!allowExternalSenders} -AcceptMessagesOnlyFromSendersOrMembers ...");
+                await EnsureUnchangedAsync(identity);
+                specifiedSenders = await _exo.ResolveRecipientAddressesAsync(specifiedSenders);
                 await _exo.SetDeliveryManagementAsync(identity, allowExternalSenders, specifiedSenders);
+                await VerifySettingsAsync(identity, current => current.AllowExternalSenders == allowExternalSenders && SameSet(current.SpecifiedSenders, specifiedSenders));
                 Logger.Log($"  SUCCESS: Delivery management settings updated for '{identity}'.", LogType.Success);
 
                 WriteGroupSettingsTicketNote(identity, "Delivery Management", new List<string>
@@ -135,12 +166,16 @@ namespace EXOKit.Services
 
             try
             {
-                var currentSendAs = await _exo.GetSendAsDelegatesAsync(identity);
+                desiredSendAsDelegates = await _exo.ResolveRecipientAddressesAsync(desiredSendAsDelegates);
+                await EnsureUnchangedAsync(identity);
+                desiredSendOnBehalfDelegates = await _exo.ResolveRecipientAddressesAsync(desiredSendOnBehalfDelegates);
+                var currentSendAs = await _exo.ResolveRecipientAddressesAsync(await _exo.GetSendAsDelegatesAsync(identity));
                 var toAddSendAs = desiredSendAsDelegates.Where(d => !currentSendAs.Contains(d, StringComparer.OrdinalIgnoreCase)).ToArray();
                 var toRemoveSendAs = currentSendAs.Where(d => !desiredSendAsDelegates.Contains(d, StringComparer.OrdinalIgnoreCase)).ToArray();
 
                 var currentSettings = await _exo.GetDistributionGroupSettingsAsync(identity);
-                var currentSendOnBehalf = currentSettings?.GrantSendOnBehalfTo ?? Array.Empty<string>();
+                if (currentSettings == null) throw new InvalidOperationException("Group settings unavailable; no delegates changed.");
+                var currentSendOnBehalf = await _exo.ResolveRecipientAddressesAsync(currentSettings.GrantSendOnBehalfTo);
                 var toRemoveSendOnBehalf = currentSendOnBehalf.Where(d => !desiredSendOnBehalfDelegates.Contains(d, StringComparer.OrdinalIgnoreCase)).ToArray();
 
                 var snapshotItems = new List<SnapshotItem>();
@@ -161,13 +196,14 @@ namespace EXOKit.Services
                         {
                             OperationType = "GroupDelegateRemoval",
                             Target = identity,
-                            Description = $"Removed {snapshotItems.Count} delegate(s) from group '{identity}'",
+                            Description = $"Before removing {snapshotItems.Count} delegate(s) from group '{identity}'",
                             Items = snapshotItems
                         });
                     }
                     catch (Exception ex)
                     {
                         Logger.Log($"Failed to save group delegate removal snapshot for '{identity}'. DETAILS: {ex.Message}", LogType.Error);
+                        throw;
                     }
                 }
 
@@ -203,6 +239,7 @@ namespace EXOKit.Services
 
                 Logger.Log($"Executing: Set-DistributionGroup -Identity '{identity}' -GrantSendOnBehalfTo ...");
                 await _exo.SetSendOnBehalfDelegatesAsync(identity, desiredSendOnBehalfDelegates);
+                await VerifySettingsAsync(identity, current => SameSet(current.SendAsDelegates, desiredSendAsDelegates) && SameSet(current.SendOnBehalfDelegates, desiredSendOnBehalfDelegates));
 
                 Logger.Log($"  SUCCESS: Delegates updated for '{identity}'.", LogType.Success);
 
@@ -236,7 +273,12 @@ namespace EXOKit.Services
             try
             {
                 Logger.Log($"Executing: Set-DistributionGroup -Identity '{identity}' -ModerationEnabled {requireModeratorApproval} -ModeratedBy ... -SendModerationNotifications {notifySenderMode}");
+                await EnsureUnchangedAsync(identity);
+                moderators = await _exo.ResolveRecipientAddressesAsync(moderators);
+                bypassSenders = await _exo.ResolveRecipientAddressesAsync(bypassSenders);
                 await _exo.SetMessageApprovalAsync(identity, requireModeratorApproval, moderators, bypassSenders, notifySenderMode);
+                await VerifySettingsAsync(identity, current => current.RequireModeratorApproval == requireModeratorApproval
+                    && SameSet(current.Moderators, moderators) && SameSet(current.BypassModerationSenders, bypassSenders) && current.NotifySenderMode == notifySenderMode);
                 Logger.Log($"  SUCCESS: Message approval settings updated for '{identity}'.", LogType.Success);
 
                 WriteGroupSettingsTicketNote(identity, "Message Approval", new List<string>
@@ -258,12 +300,20 @@ namespace EXOKit.Services
 
         public async Task<bool> SaveMembershipApprovalAsync(string identity, string joinRestriction, string departRestriction)
         {
-            if (await ValidateDistributionGroupAsync(identity) == null) return false;
+            var groupType = await ValidateDistributionGroupAsync(identity);
+            if (groupType == null) return false;
+            if (groupType == "MailUniversalSecurityGroup")
+            {
+                joinRestriction = "Closed";
+                departRestriction = "Closed";
+            }
 
             try
             {
                 Logger.Log($"Executing: Set-DistributionGroup -Identity '{identity}' -MemberJoinRestriction {joinRestriction} -MemberDepartRestriction {departRestriction}");
+                await EnsureUnchangedAsync(identity);
                 await _exo.SetMembershipApprovalAsync(identity, joinRestriction, departRestriction);
+                await VerifySettingsAsync(identity, current => current.JoinRestriction == joinRestriction && current.DepartRestriction == departRestriction);
                 Logger.Log($"  SUCCESS: Membership approval settings updated for '{identity}'.", LogType.Success);
 
                 WriteGroupSettingsTicketNote(identity, "Membership Approval", new List<string>

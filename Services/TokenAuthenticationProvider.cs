@@ -25,7 +25,19 @@ namespace EXOKit.Services
             System.Collections.Generic.Dictionary<string, object>? additionalAuthenticationContext = null,
             CancellationToken cancellationToken = default)
         {
-            var token = await _authService.GetAccessTokenAsync(_scopes);
+            cancellationToken.ThrowIfCancellationRequested();
+            var uri = request.URI;
+            if (uri.Scheme != "https" || !string.Equals(uri.Host, "graph.microsoft.com", System.StringComparison.OrdinalIgnoreCase))
+                throw new System.InvalidOperationException("Refusing to send a Graph token to an untrusted endpoint.");
+            string? claims = null;
+            if (additionalAuthenticationContext?.TryGetValue("claims", out var claimValue) == true && claimValue is string encodedClaims)
+            {
+                claims = System.Text.Encoding.UTF8.GetString(System.Convert.FromBase64String(encodedClaims));
+                using var document = System.Text.Json.JsonDocument.Parse(claims);
+                if (document.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object) throw new System.InvalidOperationException("Invalid authentication claims challenge.");
+            }
+            var token = await _authService.GetAccessTokenAsync(_scopes, claims, cancellationToken);
+            if (string.IsNullOrEmpty(token)) throw new System.InvalidOperationException("Graph authentication did not return a token.");
             if (!string.IsNullOrEmpty(token))
             {
                 request.Headers.Remove("Authorization");

@@ -49,7 +49,7 @@ namespace EXOKit.Services
     /// </summary>
     public class GroupMembershipService
     {
-        private static readonly string[] SupportedDistributionGroupTypes = { "MailUniversalDistributionGroup", "MailNonUniversalGroup" };
+        private static readonly string[] SupportedDistributionGroupTypes = { "MailUniversalDistributionGroup", "MailNonUniversalGroup", "MailUniversalSecurityGroup" };
 
         private readonly ExoPowerShellService _exo;
         private readonly GraphService _graph;
@@ -252,28 +252,6 @@ namespace EXOKit.Services
                     await ValidateGroupRoleChangesAsync(operationType, groupEmail, validationQueue, resultMap);
                 }
 
-                if (operationType == PermissionOperationType.Remove && snapshotItems.Count > 0)
-                {
-                    try
-                    {
-                        _snapshots.SaveSnapshot(new SnapshotRecord
-                        {
-                            OperationType = "GroupMembershipRemoval",
-                            Target = groupEmail,
-                            Description = $"Removed {snapshotItems.Count} member/owner role(s) from group '{groupEmail}'",
-                            Metadata =
-                            {
-                                ["GroupKind"] = groupContext.GroupKind.ToString(),
-                                ["M365GroupId"] = groupContext.M365GroupId ?? string.Empty
-                            },
-                            Items = snapshotItems
-                        });
-                    }
-                    catch (Exception ex)
-                    {
-                        Logger.Log($"Failed to save group membership removal snapshot for '{groupEmail}'. DETAILS: {ex.Message}", LogType.Error);
-                    }
-                }
             }
 
             var summaryResults = resultMap.ToDictionary(
@@ -354,28 +332,23 @@ namespace EXOKit.Services
         {
             if (!isPresent)
             {
-                // Exchange Online's ManagedBy attribute (used for Distribution Group owners) reads from an
-                // eventually-consistent AD replica, which can lag behind a recent add and cause this
-                // pre-check to report "not present" even though the owner role genuinely exists. Only
-                // trust a negative pre-check outright for M365 Group roles (Graph's membership/ownership
-                // checks are far more consistent); for Distribution Group Owner/Member roles, still attempt
-                // the removal and let the cmdlet's own "not found" style error confirm the true state.
-                if (groupContext.GroupKind == GroupKind.M365)
-                {
-                    Logger.Log($"    STATUS: {role} not found.", LogType.Warning);
-                    statuses.Add($"{role} (Not Found)");
-                    return;
-                }
+                Logger.Log($"    STATUS: {role} not found in current read; no mutation performed.", LogType.Warning);
+                statuses.Add($"{role} (Not Found - No Change)");
+                return;
             }
 
-            // Always capture the "before" snapshot item ahead of attempting the removal, even when the
-            // pre-check reported the role as absent for a Distribution Group: that pre-check can be a
-            // false negative (see above), and if the removal below succeeds anyway, we still need the
-            // snapshot to exist so the change can be restored/undone later.
             snapshotItems.Add(new SnapshotItem { User = userEmail, UserId = mgUserId, Role = role.ToString() });
 
             try
             {
+                _snapshots.SaveSnapshot(new SnapshotRecord
+                {
+                    OperationType = "GroupMembershipRemoval",
+                    Target = groupEmail,
+                    Description = $"Before removing {role} for '{userEmail}' from '{groupEmail}'",
+                    Metadata = { ["GroupKind"] = groupContext.GroupKind.ToString(), ["M365GroupId"] = groupContext.M365GroupId ?? string.Empty },
+                    Items = { new SnapshotItem { User = userEmail, UserId = mgUserId, Role = role.ToString() } }
+                });
                 if (groupContext.GroupKind == GroupKind.M365)
                 {
                     if (role == GroupRole.Member)
@@ -456,7 +429,15 @@ namespace EXOKit.Services
                         continue;
                     }
 
-                    var isPresent = await TestGroupRolePresenceAsync(item.GroupKind, item.Role, groupEmail, item.GroupId, item.UserId, item.UserRecipient, item.User);
+                    bool isPresent;
+                    try { isPresent = await TestGroupRolePresenceAsync(item.GroupKind, item.Role, groupEmail, item.GroupId, item.UserId, item.UserRecipient, item.User); }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception exception)
+                    {
+                        Logger.Log($"Cannot verify {item.Role} for '{item.User}': {exception.Message}", LogType.Warning);
+                        remaining.Add(item);
+                        continue;
+                    }
                     var isValidated = operationType == PermissionOperationType.Add ? isPresent : !isPresent;
 
                     if (isValidated)

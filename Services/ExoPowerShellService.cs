@@ -72,13 +72,17 @@ namespace EXOKit.Services
         private static bool _consoleAllocated;
 
         public bool IsConnected { get; private set; }
+        public CancellationToken OperationCancellationToken { get; set; }
         public string? ConnectedUserPrincipalName { get; private set; }
+        public string? ConnectedTenantId { get; private set; }
 
-        public Task<bool> ConnectAsync() => RunOnStaThreadAsync(() =>
+        public Task<bool> ConnectAsync(bool useBrowserSignIn = false) => RunOnStaThreadAsync(() =>
         {
             try
             {
-                Logger.Log("Connecting to Exchange Online (PowerShell)...");
+                Logger.Log(useBrowserSignIn
+                    ? "Connecting to Exchange Online using browser sign-in (WAM compatibility mode)..."
+                    : "Connecting to Exchange Online using interactive Microsoft sign-in...");
                 EnsureConsoleAllocated();
                 EnsureRunspaceOpen();
 
@@ -87,6 +91,7 @@ namespace EXOKit.Services
                     ps.Runspace = _runspace;
                     ps.AddCommand("Import-Module")
                       .AddParameter("Name", "ExchangeOnlineManagement")
+                      .AddParameter("MinimumVersion", new Version(3, 10, 1))
                       .AddParameter("ErrorAction", "Stop");
                     ps.Invoke();
                     LogPipelineErrors(ps, "Import-Module ExchangeOnlineManagement");
@@ -102,9 +107,10 @@ namespace EXOKit.Services
                 {
                     ps.Runspace = _runspace;
                     ps.AddCommand("Connect-ExchangeOnline")
-                      .AddParameter("Device")
+                      .AddParameter("SkipLoadingFormatData", true)
                       .AddParameter("ShowBanner", false)
                       .AddParameter("ErrorAction", "Stop");
+                                        if (useBrowserSignIn) ps.AddParameter("DisableWAM");
                     ps.Invoke();
                     LogPipelineErrors(ps, "Connect-ExchangeOnline");
 
@@ -115,11 +121,15 @@ namespace EXOKit.Services
                 {
                     using var ps = PowerShell.Create();
                     ps.Runspace = _runspace;
-                    ps.AddCommand("Get-ConnectionInformation").AddParameter("ErrorAction", "SilentlyContinue");
+                    ps.AddCommand("Get-ConnectionInformation").AddParameter("ErrorAction", "Stop");
                     var results = ps.Invoke();
+                    if (ps.HadErrors) throw BuildPipelineException(ps);
+                    if (results.Count != 1) throw new InvalidOperationException("Expected one Exchange Online connection. Disconnect and reconnect.");
                     if (results.Count > 0)
                     {
                         ConnectedUserPrincipalName = results[0].Properties["UserPrincipalName"]?.Value?.ToString();
+                        ConnectedTenantId = results[0].Properties["TenantID"]?.Value?.ToString();
+                        if (!Guid.TryParse(ConnectedTenantId, out _)) throw new InvalidOperationException("Exchange Online did not return a valid tenant ID.");
                     }
                     Logger.Log($"Successfully connected to Exchange Online{(ConnectedUserPrincipalName != null ? $" as {ConnectedUserPrincipalName}" : string.Empty)}.", LogType.Success);
                 }
@@ -157,8 +167,17 @@ namespace EXOKit.Services
             {
                 IsConnected = false;
                 ConnectedUserPrincipalName = null;
+                ConnectedTenantId = null;
+                _runspace?.Dispose();
+                _runspace = null;
             }
         });
+
+        public async Task ShutdownAsync()
+        {
+            await DisconnectAsync();
+            _workQueue.CompleteAdding();
+        }
 
         // --- Recipient / Mailbox lookups ---
 
@@ -195,7 +214,8 @@ namespace EXOKit.Services
             ps.Runspace = _runspace;
             ps.AddCommand("Get-Recipient").AddParameter("Identity", identity).AddParameter("ErrorAction", "Stop");
             var results = ps.Invoke();
-            if (ps.HadErrors || results.Count == 0) return null;
+            if (ps.HadErrors) throw BuildPipelineException(ps);
+            if (results.Count == 0) return null;
             return ToRecipientInfo(results[0]);
         });
 
@@ -210,7 +230,8 @@ namespace EXOKit.Services
             }
             ps.AddParameter("ErrorAction", "Stop");
             var results = ps.Invoke();
-            return !ps.HadErrors && results.Count > 0;
+            if (ps.HadErrors) throw BuildPipelineException(ps);
+            return results.Count > 0;
         });
 
         public Task<string> GetRecipientTypeAsync(string identity) => RunOnStaThreadAsync(() =>
@@ -219,13 +240,17 @@ namespace EXOKit.Services
             ps.Runspace = _runspace;
             ps.AddCommand("Get-EXORecipient").AddParameter("Identity", identity).AddParameter("ErrorAction", "Stop");
             var results = ps.Invoke();
-            if (ps.HadErrors || results.Count == 0) return "Not Found";
+            if (ps.HadErrors) throw BuildPipelineException(ps);
+            if (results.Count == 0) return "Not Found";
             return results[0].Properties["RecipientTypeDetails"]?.Value?.ToString() ?? "Unknown";
         });
 
         // --- Full Access / Send As / Send on Behalf ---
 
-        public Task<bool> HasFullAccessAsync(string mailboxIdentity, string userIdentity, RecipientInfo userObject) => RunOnStaThreadAsync(() =>
+        public Task<bool> HasFullAccessAsync(string mailboxIdentity, string userIdentity, RecipientInfo userObject) =>
+            PermissionVerification.ReadAsync(() => HasFullAccessCoreAsync(mailboxIdentity, userIdentity, userObject));
+
+        private Task<bool> HasFullAccessCoreAsync(string mailboxIdentity, string userIdentity, RecipientInfo userObject) => RunOnStaThreadAsync(() =>
         {
             var userKeys = new HashSet<string>(userObject.Keys(userIdentity), StringComparer.OrdinalIgnoreCase);
 
@@ -267,7 +292,14 @@ namespace EXOKit.Services
             return false;
         });
 
-        public Task AddFullAccessAsync(string mailboxIdentity, string userIdentity) => RunOnStaThreadAsync(() =>
+        public async Task AddFullAccessAsync(string mailboxIdentity, string userIdentity)
+        {
+            var user = await GetRecipientAsync(userIdentity) ?? throw new InvalidOperationException("Permission recipient not found.");
+            await PermissionVerification.ApplyAsync(() => AddFullAccessCoreAsync(mailboxIdentity, userIdentity),
+                () => HasFullAccessAsync(mailboxIdentity, userIdentity, user), true);
+        }
+
+        private Task AddFullAccessCoreAsync(string mailboxIdentity, string userIdentity) => RunOnStaThreadAsync(() =>
         {
             using var ps = PowerShell.Create();
             ps.Runspace = _runspace;
@@ -282,7 +314,14 @@ namespace EXOKit.Services
             if (ps.HadErrors) throw BuildPipelineException(ps);
         });
 
-        public Task RemoveFullAccessAsync(string mailboxIdentity, string userIdentity) => RunOnStaThreadAsync(() =>
+        public async Task RemoveFullAccessAsync(string mailboxIdentity, string userIdentity)
+        {
+            var user = await GetRecipientAsync(userIdentity) ?? throw new InvalidOperationException("Permission recipient not found.");
+            await PermissionVerification.ApplyAsync(() => RemoveFullAccessCoreAsync(mailboxIdentity, userIdentity),
+                () => HasFullAccessAsync(mailboxIdentity, userIdentity, user), false);
+        }
+
+        private Task RemoveFullAccessCoreAsync(string mailboxIdentity, string userIdentity) => RunOnStaThreadAsync(() =>
         {
             using var ps = PowerShell.Create();
             ps.Runspace = _runspace;
@@ -297,7 +336,10 @@ namespace EXOKit.Services
             if (ps.HadErrors) throw BuildPipelineException(ps);
         });
 
-        public Task<bool> HasSendAsAsync(string mailboxIdentity, string userIdentity) => RunOnStaThreadAsync(() =>
+        public Task<bool> HasSendAsAsync(string mailboxIdentity, string userIdentity) =>
+            PermissionVerification.ReadAsync(() => HasSendAsCoreAsync(mailboxIdentity, userIdentity));
+
+        private Task<bool> HasSendAsCoreAsync(string mailboxIdentity, string userIdentity) => RunOnStaThreadAsync(() =>
         {
             using var ps = PowerShell.Create();
             ps.Runspace = _runspace;
@@ -312,7 +354,11 @@ namespace EXOKit.Services
             });
         });
 
-        public Task AddSendAsAsync(string mailboxIdentity, string userIdentity) => RunOnStaThreadAsync(() =>
+        public Task AddSendAsAsync(string mailboxIdentity, string userIdentity) =>
+            PermissionVerification.ApplyAsync(() => AddSendAsCoreAsync(mailboxIdentity, userIdentity),
+                () => HasSendAsAsync(mailboxIdentity, userIdentity), true);
+
+        private Task AddSendAsCoreAsync(string mailboxIdentity, string userIdentity) => RunOnStaThreadAsync(() =>
         {
             using var ps = PowerShell.Create();
             ps.Runspace = _runspace;
@@ -326,7 +372,11 @@ namespace EXOKit.Services
             if (ps.HadErrors) throw BuildPipelineException(ps);
         });
 
-        public Task RemoveSendAsAsync(string mailboxIdentity, string userIdentity) => RunOnStaThreadAsync(() =>
+        public Task RemoveSendAsAsync(string mailboxIdentity, string userIdentity) =>
+            PermissionVerification.ApplyAsync(() => RemoveSendAsCoreAsync(mailboxIdentity, userIdentity),
+                () => HasSendAsAsync(mailboxIdentity, userIdentity), false);
+
+        private Task RemoveSendAsCoreAsync(string mailboxIdentity, string userIdentity) => RunOnStaThreadAsync(() =>
         {
             using var ps = PowerShell.Create();
             ps.Runspace = _runspace;
@@ -340,29 +390,12 @@ namespace EXOKit.Services
             if (ps.HadErrors) throw BuildPipelineException(ps);
         });
 
-        public Task<bool> HasSendOnBehalfAsync(string mailboxIdentity, RecipientInfo userObject) => RunOnStaThreadAsync(() =>
+        public async Task<bool> HasSendOnBehalfAsync(string mailboxIdentity, RecipientInfo userObject)
         {
-            using var ps = PowerShell.Create();
-            ps.Runspace = _runspace;
-            ps.AddCommand("Get-Mailbox").AddParameter("Identity", mailboxIdentity).AddParameter("ErrorAction", "SilentlyContinue");
-            var results = ps.Invoke();
-            if (results.Count == 0) return false;
-
-            var delegates = results[0].Properties["GrantSendOnBehalfTo"]?.Value as IEnumerable<object>;
-            if (delegates == null) return false;
-
-            foreach (var delegateObj in delegates)
-            {
-                var delegateStr = delegateObj?.ToString();
-                if (!string.IsNullOrEmpty(delegateStr) &&
-                    (string.Equals(delegateStr, userObject.DistinguishedName, StringComparison.OrdinalIgnoreCase) ||
-                     string.Equals(delegateStr, userObject.Guid, StringComparison.OrdinalIgnoreCase)))
-                {
-                    return true;
-                }
-            }
-            return false;
-        });
+            if (string.IsNullOrWhiteSpace(userObject.PrimarySmtpAddress)) throw new InvalidOperationException("Recipient SMTP address is unavailable.");
+            var delegates = await GetAllSendOnBehalfDelegatesAsync(mailboxIdentity);
+            return delegates.Contains(userObject.PrimarySmtpAddress, StringComparer.OrdinalIgnoreCase);
+        }
 
         public Task AddSendOnBehalfAsync(string mailboxIdentity, string userIdentity) =>
             AddSendOnBehalfBatchAsync(mailboxIdentity, new[] { userIdentity });
@@ -408,6 +441,7 @@ namespace EXOKit.Services
             ps.Runspace = _runspace;
             ps.AddCommand("Get-Recipient").AddParameter("Identity", identity).AddParameter("ErrorAction", "SilentlyContinue");
             var results = ps.Invoke();
+            if (ps.HadErrors) throw BuildPipelineException(ps);
             if (results.Count == 0) return null;
             return results[0].Properties["RecipientTypeDetails"]?.Value?.ToString();
         });
@@ -419,6 +453,7 @@ namespace EXOKit.Services
             ps.Runspace = _runspace;
             ps.AddCommand("Get-DistributionGroupMember").AddParameter("Identity", groupIdentity).AddParameter("ResultSize", "Unlimited").AddParameter("ErrorAction", "SilentlyContinue");
             var results = ps.Invoke();
+            if (ps.HadErrors) throw BuildPipelineException(ps);
             foreach (var r in results)
             {
                 foreach (var propName in new[] { "PrimarySmtpAddress", "Alias", "DistinguishedName", "Guid", "Name" })
@@ -437,6 +472,7 @@ namespace EXOKit.Services
             ps.Runspace = _runspace;
             ps.AddCommand("Get-DistributionGroup").AddParameter("Identity", groupIdentity).AddParameter("ErrorAction", "SilentlyContinue");
             var results = ps.Invoke();
+            if (ps.HadErrors) throw BuildPipelineException(ps);
             if (results.Count == 0) return false;
             var managedBy = results[0].Properties["ManagedBy"]?.Value as IEnumerable<object>;
             if (managedBy == null) return false;
@@ -592,17 +628,7 @@ namespace EXOKit.Services
                 ps.Runspace = _runspace;
                 if (isDynamic)
                 {
-                    // Dynamic groups need their members expanded via the group's recipient filter.
-                    string? filter;
-                    using (var filterPs = PowerShell.Create())
-                    {
-                        filterPs.Runspace = _runspace;
-                        filterPs.AddCommand("Get-DynamicDistributionGroup").AddParameter("Identity", groupIdentity).AddParameter("ErrorAction", "Stop");
-                        var ddgResults = filterPs.Invoke();
-                        filter = ddgResults.Count > 0 ? ddgResults[0].Properties["RecipientFilter"]?.Value?.ToString() : null;
-                    }
-
-                    ps.AddCommand("Get-Recipient").AddParameter("RecipientPreviewFilter", filter).AddParameter("ResultSize", "Unlimited").AddParameter("ErrorAction", "Stop");
+                    ps.AddCommand("Get-DynamicDistributionGroupMember").AddParameter("Identity", groupIdentity).AddParameter("ResultSize", "Unlimited").AddParameter("ErrorAction", "Stop");
                 }
                 else
                 {
@@ -625,7 +651,10 @@ namespace EXOKit.Services
         /// which can be extremely slow (or appear to hang) on mailboxes with many system/inherited
         /// permission entries.
         /// </summary>
-        public Task<List<string>> GetAllFullAccessDelegatesAsync(string mailboxIdentity) => RunOnStaThreadAsync(() =>
+        public Task<List<string>> GetAllFullAccessDelegatesAsync(string mailboxIdentity) =>
+            PermissionVerification.ReadAsync(() => GetAllFullAccessDelegatesCoreAsync(mailboxIdentity));
+
+        private Task<List<string>> GetAllFullAccessDelegatesCoreAsync(string mailboxIdentity) => RunOnStaThreadAsync(() =>
         {
             using var ps = PowerShell.Create();
             ps.Runspace = _runspace;
@@ -640,6 +669,7 @@ namespace EXOKit.Services
                     var deny = r.Properties["Deny"]?.Value is bool d && d;
                     var user = r.Properties["User"]?.Value?.ToString() ?? string.Empty;
                     return !deny
+                        && !(r.Properties["IsInherited"]?.Value is bool inherited && inherited)
                         && (accessRights?.Any(a => string.Equals(a?.ToString(), "FullAccess", StringComparison.OrdinalIgnoreCase)) ?? false)
                         && !user.StartsWith("NT AUTHORITY\\", StringComparison.OrdinalIgnoreCase)
                         && !user.StartsWith("S-1-5-", StringComparison.OrdinalIgnoreCase);
@@ -653,7 +683,10 @@ namespace EXOKit.Services
         /// Get-EXORecipientPermission cmdlet rather than the legacy Get-RecipientPermission, which can
         /// be extremely slow (or appear to hang) on mailboxes with many system/inherited entries.
         /// </summary>
-        public Task<List<string>> GetAllSendAsDelegatesAsync(string mailboxIdentity) => RunOnStaThreadAsync(() =>
+        public Task<List<string>> GetAllSendAsDelegatesAsync(string mailboxIdentity) =>
+            PermissionVerification.ReadAsync(() => GetAllSendAsDelegatesCoreAsync(mailboxIdentity));
+
+        private Task<List<string>> GetAllSendAsDelegatesCoreAsync(string mailboxIdentity) => RunOnStaThreadAsync(() =>
         {
             using var ps = PowerShell.Create();
             ps.Runspace = _runspace;
@@ -702,6 +735,8 @@ namespace EXOKit.Services
                 lookupPs.Runspace = _runspace;
                 lookupPs.AddCommand("Get-Recipient").AddParameter("Identity", delegateStr).AddParameter("ErrorAction", "SilentlyContinue");
                 var lookupResults = lookupPs.Invoke();
+                if (lookupPs.HadErrors) throw BuildPipelineException(lookupPs);
+                if (lookupResults.Count == 0) throw new InvalidOperationException($"Cannot resolve Send on Behalf delegate '{delegateStr}'.");
                 resolved.Add(lookupResults.Count > 0 ? (lookupResults[0].Properties["PrimarySmtpAddress"]?.Value?.ToString() ?? delegateStr) : delegateStr);
             }
             return resolved;
@@ -748,6 +783,7 @@ namespace EXOKit.Services
               .AddParameter("PrimarySmtpAddress", primarySmtpAddress)
               .AddParameter("Type", isSecurityGroup ? "Security" : "Distribution")
               .AddParameter("ManagedBy", owner)
+              .AddParameter("RequireSenderAuthenticationEnabled", !allowExternalSenders)
               .AddParameter("MemberJoinRestriction", memberJoinRestriction)
               .AddParameter("MemberDepartRestriction", memberDepartRestriction)
               .AddParameter("Confirm", false)
@@ -759,15 +795,6 @@ namespace EXOKit.Services
             ps.Invoke();
             if (ps.HadErrors) throw BuildPipelineException(ps);
 
-            using var psSet = PowerShell.Create();
-            psSet.Runspace = _runspace;
-            psSet.AddCommand("Set-DistributionGroup")
-                 .AddParameter("Identity", primarySmtpAddress)
-                 .AddParameter("RequireSenderAuthenticationEnabled", !allowExternalSenders)
-                 .AddParameter("Confirm", false)
-                 .AddParameter("ErrorAction", "Stop");
-            psSet.Invoke();
-            if (psSet.HadErrors) throw BuildPipelineException(psSet);
         });
 
         /// <summary>
@@ -926,7 +953,10 @@ namespace EXOKit.Services
         /// Returns the current Send As delegates for a group via Get-RecipientPermission, mirroring the
         /// EAC "Edit delegates" panel's delegate list (Send As portion).
         /// </summary>
-        public Task<List<string>> GetSendAsDelegatesAsync(string identity) => RunOnStaThreadAsync(() =>
+        public Task<List<string>> GetSendAsDelegatesAsync(string identity) =>
+            PermissionVerification.ReadAsync(() => GetSendAsDelegatesCoreAsync(identity));
+
+        private Task<List<string>> GetSendAsDelegatesCoreAsync(string identity) => RunOnStaThreadAsync(() =>
         {
             using var ps = PowerShell.Create();
             ps.Runspace = _runspace;
@@ -937,6 +967,8 @@ namespace EXOKit.Services
             var results = ps.Invoke();
             CheckForNullReferenceServerError(ps);
             return results
+                .Where(result => !string.Equals(result.Properties["AccessControlType"]?.Value?.ToString(), "Deny", StringComparison.OrdinalIgnoreCase)
+                    && !(result.Properties["IsInherited"]?.Value is bool inherited && inherited))
                 .Select(r => r.Properties["Trustee"]?.Value?.ToString())
                 .Where(v => !string.IsNullOrEmpty(v) && !string.Equals(v, "NT AUTHORITY\\SELF", StringComparison.OrdinalIgnoreCase))
                 .Select(v => v!)
@@ -944,28 +976,17 @@ namespace EXOKit.Services
                 .ToList();
         });
 
-        public Task AddSendAsDelegateAsync(string identity, string delegateIdentity) => RunOnStaThreadAsync(() =>
-        {
-            using var ps = PowerShell.Create();
-            ps.Runspace = _runspace;
-            ps.AddCommand("Add-RecipientPermission")
-              .AddParameter("Identity", identity)
-              .AddParameter("Trustee", delegateIdentity)
-              .AddParameter("AccessRights", "SendAs")
-              .AddParameter("Confirm", false)
-              .AddParameter("ErrorAction", "Stop");
-            ps.Invoke();
-            if (ps.HadErrors) throw BuildPipelineException(ps);
-        });
+        public Task AddSendAsDelegateAsync(string identity, string delegateIdentity) => AddSendAsAsync(identity, delegateIdentity);
 
-        public Task RemoveSendAsDelegateAsync(string identity, string delegateIdentity) => RunOnStaThreadAsync(() =>
+        public Task RemoveSendAsDelegateAsync(string identity, string delegateIdentity) => RemoveSendAsAsync(identity, delegateIdentity);
+
+        public Task AddGroupSendOnBehalfAsync(string identity, string delegateIdentity) => RunOnStaThreadAsync(() =>
         {
             using var ps = PowerShell.Create();
             ps.Runspace = _runspace;
-            ps.AddCommand("Remove-RecipientPermission")
-              .AddParameter("Identity", identity)
-              .AddParameter("Trustee", delegateIdentity)
-              .AddParameter("AccessRights", "SendAs")
+                        ps.AddCommand("Set-DistributionGroup")
+                            .AddParameter("Identity", identity)
+                            .AddParameter("GrantSendOnBehalfTo", new Hashtable { ["Add"] = delegateIdentity })
               .AddParameter("Confirm", false)
               .AddParameter("ErrorAction", "Stop");
             ps.Invoke();
@@ -1033,6 +1054,27 @@ namespace EXOKit.Services
 
         // --- CSV / import helper (dialog handled in UI layer) ---
 
+        public async Task<string[]> ResolveRecipientAddressesAsync(IEnumerable<string> identities)
+        {
+            var addresses = new List<string>();
+            foreach (var identity in identities)
+            {
+                var recipient = await GetRecipientAsync(identity);
+                if (string.IsNullOrWhiteSpace(recipient?.PrimarySmtpAddress))
+                    throw new InvalidOperationException($"Cannot resolve recipient '{identity}' to a canonical SMTP address.");
+                addresses.Add(recipient.PrimarySmtpAddress);
+            }
+            return addresses.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        }
+
+        public async Task<bool> HasGroupSendOnBehalfAsync(string identity, string user)
+        {
+            var settings = await GetDistributionGroupSettingsAsync(identity) ?? throw new InvalidOperationException("Group settings unavailable.");
+            var current = await ResolveRecipientAddressesAsync(settings.GrantSendOnBehalfTo);
+            var desired = await ResolveRecipientAddressesAsync(new[] { user });
+            return current.Contains(desired[0], StringComparer.OrdinalIgnoreCase);
+        }
+
         private static RecipientInfo ToRecipientInfo(PSObject obj)
         {
             string? GetString(string name) => obj.Properties[name]?.Value?.ToString();
@@ -1058,14 +1100,7 @@ namespace EXOKit.Services
 
         private static void CheckForNullReferenceServerError(PowerShell ps)
         {
-            if (ps.HadErrors)
-            {
-                var nreError = ps.Streams.Error.FirstOrDefault(e => e.ToString().Contains("Object reference not set to an instance of an object", StringComparison.OrdinalIgnoreCase));
-                if (nreError != null)
-                {
-                    throw new InvalidOperationException($"Write-ErrorMessage : {nreError}");
-                }
-            }
+            if (ps.HadErrors) throw BuildPipelineException(ps);
         }
 
         private void EnsureRunspaceOpen()
@@ -1086,14 +1121,6 @@ namespace EXOKit.Services
             var iss = InitialSessionState.CreateDefault2();
             iss.Formats.Clear();
             iss.Types.Clear();
-
-            // ExchangeOnlineManagement (and its PackageManagement dependency) may be installed under
-            // a OneDrive-synced folder. Files synced through OneDrive get flagged by PowerShell's
-            // AuthorizationManager ("AuthorizationManager check failed"), which blocks their
-            // format/type ps1xml files from loading even though the module itself is trusted. Since
-            // this host only ever loads modules we explicitly request, disable that check instead of
-            // relying on the machine's execution-policy/zone-identifier state.
-            iss.AuthorizationManager = null;
 
             // The default runspace has no PSHost UI attached, which causes MSAL's WAM broker to fail
             // with "A window handle must be configured" when it tries to show an interactive popup.
@@ -1156,11 +1183,12 @@ namespace EXOKit.Services
         private Task<T> RunOnStaThreadAsync<T>(Func<T> work)
         {
             EnsureStaThreadStarted();
-            var tcs = new TaskCompletionSource<T>();
+            var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
             _workQueue.Add(() =>
             {
                 try
                 {
+                    OperationCancellationToken.ThrowIfCancellationRequested();
                     tcs.SetResult(work());
                 }
                 catch (Exception ex)

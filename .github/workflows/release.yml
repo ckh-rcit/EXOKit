@@ -19,26 +19,40 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: "8.0.x"
+          dotnet-version: "10.0.x"
 
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
       - name: Restore dependencies
-        run: dotnet restore "EXOKit.csproj"
+        run: dotnet restore "EXOKit.csproj" -p:NuGetAudit=true -p:NuGetAuditMode=all
 
-      - name: Create config.json from sample
+      - name: Prepare release identity and update feed
         shell: pwsh
-        run: Copy-Item "config.sample.json" "config.json"
+        env:
+          APPINSTALLER_FEED_URL: ${{ vars.APPINSTALLER_FEED_URL }}
+        run: |
+          $packageUrl = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:GITHUB_REF_NAME/EXOKit-$env:GITHUB_REF_NAME-x64.msix"
+          ./scripts/Prepare-Release.ps1 -VersionTag $env:GITHUB_REF_NAME -FeedUrl $env:APPINSTALLER_FEED_URL -PackageUrl $packageUrl
+          $sample = Get-Content config.sample.json -Raw | ConvertFrom-Json
+          $sample.Settings.UpdateFeedUrl = "$env:APPINSTALLER_FEED_URL"
+          $sample | ConvertTo-Json -Depth 20 | Set-Content config.sample.json -Encoding utf8
+
+      - name: Regression tests
+        run: dotnet test tests/EXOKit.Tests/EXOKit.Tests.csproj --configuration Release
 
       - name: Decode signing certificate
         shell: pwsh
+        env:
+          PACKAGE_CERTIFICATE_BASE64: ${{ secrets.PACKAGE_CERTIFICATE_BASE64 }}
         run: |
-          $bytes = [Convert]::FromBase64String("${{ secrets.PACKAGE_CERTIFICATE_BASE64 }}")
+          $bytes = [Convert]::FromBase64String($env:PACKAGE_CERTIFICATE_BASE64)
           [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\EXOKitSigning.pfx", $bytes)
 
       - name: Build signed MSIX package
         shell: pwsh
+        env:
+          PackageCertificatePassword: ${{ secrets.PACKAGE_CERTIFICATE_PASSWORD }}
         run: >
           msbuild "EXOKit.csproj"
           /p:Configuration=Release
@@ -50,14 +64,18 @@ jobs:
           /p:WindowsAppSDKSelfContained=true
           /p:SelfContained=true
           /p:PublishReadyToRun=false
+          /p:Version="$($env:GITHUB_REF_NAME.Substring(1))"
+          /p:AppxPackageSigningTimestampDigestAlgorithm=SHA256
+          /p:AppxPackageSigningTimestampServerUrl="http://timestamp.digicert.com"
           /p:AppxPackageSigningEnabled=true
           /p:PackageCertificateKeyFile="$env:RUNNER_TEMP\EXOKitSigning.pfx"
-          /p:PackageCertificatePassword="${{ secrets.PACKAGE_CERTIFICATE_PASSWORD }}"
 
       - name: Export public certificate
         shell: pwsh
+        env:
+          PACKAGE_CERTIFICATE_PASSWORD: ${{ secrets.PACKAGE_CERTIFICATE_PASSWORD }}
         run: |
-          $securePassword = ConvertTo-SecureString -String "${{ secrets.PACKAGE_CERTIFICATE_PASSWORD }}" -AsPlainText -Force
+          $securePassword = ConvertTo-SecureString -String $env:PACKAGE_CERTIFICATE_PASSWORD -AsPlainText -Force
           $cert = Get-PfxCertificate -FilePath "$env:RUNNER_TEMP\EXOKitSigning.pfx" -Password $securePassword
           Export-Certificate -Cert $cert -FilePath "$env:RUNNER_TEMP\EXOKitSigning.cer" | Out-Null
 
@@ -71,6 +89,7 @@ jobs:
         run: |
           $version = "${{ github.ref_name }}"
           $msix = Get-ChildItem -Path "publish/msix" -Recurse -Filter "*.msix" | Select-Object -First 1
+          if (-not $msix) { throw 'MSIX package was not produced.' }
           Copy-Item $msix.FullName -Destination "EXOKit-$version-x64.msix"
 
       - name: Package certificate trust bundle
@@ -89,5 +108,6 @@ jobs:
           files: |
             EXOKit-*.msix
             EXOKit-Trust-Bundle-*.zip
+            EXOKit.appinstaller
           generate_release_notes: true
 

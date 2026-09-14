@@ -18,6 +18,8 @@ namespace EXOKit.Services
         private readonly AuthService _authService;
         private readonly string[] _scopes;
         private GraphServiceClient? _graphClient;
+        public bool IsConnected => _authService.IsGraphConnected;
+        public string? ConnectedTenantId => _authService.ConnectedTenantId;
 
         public GraphService(AuthService authService, string[] scopes)
         {
@@ -33,6 +35,16 @@ namespace EXOKit.Services
 
         private GraphServiceClient Client => _graphClient ?? throw new InvalidOperationException("Graph client not initialized. Connect to Microsoft Graph first.");
 
+        public async Task VerifyConnectionAsync()
+        {
+            var response = await Client.Users.GetAsync(config =>
+            {
+                config.QueryParameters.Select = new[] { "id" };
+                config.QueryParameters.Top = 1;
+            }, _authService.OperationCancellationToken);
+            if (response?.Value == null) throw new InvalidOperationException("Graph returned no directory response.");
+        }
+
         public async Task<string?> GetUserIdAsync(string userIdentity)
         {
             try
@@ -46,12 +58,13 @@ namespace EXOKit.Services
             catch (ODataError odataEx)
             {
                 Logger.Log($"Graph user lookup failed for '{userIdentity}': {odataEx.Error?.Code} - {odataEx.Error?.Message}", LogType.Error);
-                return null;
+                if (odataEx.ResponseStatusCode == 404) return null;
+                throw;
             }
             catch (Exception ex)
             {
                 Logger.Log($"Graph user lookup failed for '{userIdentity}': {ex.Message}", LogType.Error);
-                return null;
+                throw;
             }
         }
 
@@ -59,23 +72,24 @@ namespace EXOKit.Services
         {
             try
             {
-                var response = await Client.Groups[groupId].Members.GraphUser.GetAsync(config =>
+                var response = await Client.Groups[groupId].Members.GetAsync(config => config.QueryParameters.Select = new[] { "id" });
+                while (response != null)
                 {
-                    config.QueryParameters.Filter = $"id eq '{userId}'";
-                    config.QueryParameters.Count = true;
-                    config.Headers.Add("ConsistencyLevel", "eventual");
-                });
-                return (response?.OdataCount ?? 0) > 0 || (response?.Value?.Count ?? 0) > 0;
+                    if (response.Value?.Any(member => member.Id == userId) == true) return true;
+                    if (string.IsNullOrEmpty(response.OdataNextLink)) return false;
+                    response = await Client.Groups[groupId].Members.WithUrl(response.OdataNextLink).GetAsync();
+                }
+                throw new InvalidOperationException("Graph returned no membership response.");
             }
             catch (ODataError odataEx)
             {
                 Logger.Log($"Graph group member check failed: {odataEx.Error?.Code} - {odataEx.Error?.Message}", LogType.Error);
-                return false;
+                throw;
             }
             catch (Exception ex)
             {
                 Logger.Log($"Graph group member check failed: {ex.Message}", LogType.Error);
-                return false;
+                throw;
             }
         }
 
@@ -83,23 +97,24 @@ namespace EXOKit.Services
         {
             try
             {
-                var response = await Client.Groups[groupId].Owners.GraphUser.GetAsync(config =>
+                var response = await Client.Groups[groupId].Owners.GetAsync(config => config.QueryParameters.Select = new[] { "id" });
+                while (response != null)
                 {
-                    config.QueryParameters.Filter = $"id eq '{userId}'";
-                    config.QueryParameters.Count = true;
-                    config.Headers.Add("ConsistencyLevel", "eventual");
-                });
-                return (response?.OdataCount ?? 0) > 0 || (response?.Value?.Count ?? 0) > 0;
+                    if (response.Value?.Any(owner => owner.Id == userId) == true) return true;
+                    if (string.IsNullOrEmpty(response.OdataNextLink)) return false;
+                    response = await Client.Groups[groupId].Owners.WithUrl(response.OdataNextLink).GetAsync();
+                }
+                throw new InvalidOperationException("Graph returned no ownership response.");
             }
             catch (ODataError odataEx)
             {
                 Logger.Log($"Graph group owner check failed: {odataEx.Error?.Code} - {odataEx.Error?.Message}", LogType.Error);
-                return false;
+                throw;
             }
             catch (Exception ex)
             {
                 Logger.Log($"Graph group owner check failed: {ex.Message}", LogType.Error);
-                return false;
+                throw;
             }
         }
 
@@ -155,18 +170,19 @@ namespace EXOKit.Services
                     config.QueryParameters.Count = true;
                 });
 
-                var group = response?.Value?.FirstOrDefault(g => g.GroupTypes != null && g.GroupTypes.Contains("Unified"));
+                if (response?.OdataNextLink != null || response?.Value?.Count > 1) throw new InvalidOperationException("Group identity is ambiguous; use its object ID.");
+                var group = response?.Value?.SingleOrDefault(g => g.GroupTypes != null && g.GroupTypes.Contains("Unified"));
                 return group?.Id;
             }
             catch (ODataError odataEx)
             {
                 Logger.Log($"Graph group lookup failed for '{groupIdentity}': {odataEx.Error?.Code} - {odataEx.Error?.Message}", LogType.Error);
-                return null;
+                throw;
             }
             catch (Exception ex)
             {
                 Logger.Log($"Graph group lookup failed for '{groupIdentity}': {ex.Message}", LogType.Error);
-                return null;
+                throw;
             }
         }
 
@@ -184,17 +200,19 @@ namespace EXOKit.Services
                     config.QueryParameters.Filter = $"displayName eq '{escaped}'";
                     config.QueryParameters.Select = new[] { "id", "displayName" };
                 });
-                return response?.Value?.FirstOrDefault()?.Id;
+                if (response?.OdataNextLink != null || response?.Value?.Count > 1)
+                    throw new InvalidOperationException("Multiple groups share this display name. Configure the Bookings GroupId instead.");
+                return response?.Value?.SingleOrDefault()?.Id;
             }
             catch (ODataError odataEx)
             {
                 Logger.Log($"Graph group lookup failed for '{groupName}': {odataEx.Error?.Code} - {odataEx.Error?.Message}", LogType.Error);
-                return null;
+                throw;
             }
             catch (Exception ex)
             {
                 Logger.Log($"Graph group lookup failed for '{groupName}': {ex.Message}", LogType.Error);
-                return null;
+                throw;
             }
         }
 
@@ -207,8 +225,13 @@ namespace EXOKit.Services
         /// </summary>
         public async Task CreateTeamFromGroupAsync(string groupId)
         {
+            try
+            {
+                if (await Client.Groups[groupId].Team.GetAsync() != null) return;
+            }
+            catch (ODataError exception) when (exception.ResponseStatusCode == 404) { }
             const int maxRetries = 3;
-            var retryDelaysMs = new[] { 3000, 5000, 7000 };
+            var retryDelaysMs = new[] { 10000, 10000, 10000 };
 
             for (var attempt = 0; attempt <= maxRetries; attempt++)
             {
@@ -225,7 +248,7 @@ namespace EXOKit.Services
                 }
                 catch (ODataError odataEx)
                 {
-                    Logger.Log($"Failed to create Team for group '{groupId}': {odataEx.Error?.Code} - {odataEx.Error?.Message}", LogType.Error);
+                    Logger.Log($"Failed to create Team for group '{groupId}': {odataEx.Error?.Code} - {odataEx.Error?.Message}. If the group is new, wait at least 15 minutes after creation and use Resume Team Provisioning for this group ID.", LogType.Error);
                     throw;
                 }
             }

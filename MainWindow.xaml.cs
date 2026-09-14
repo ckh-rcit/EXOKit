@@ -42,21 +42,25 @@ namespace EXOKit
         private AuthService _authService;
         private GraphService _graphService;
         private readonly SnapshotService _snapshotService = new();
-        private readonly SnapshotRestoreService _snapshotRestoreService;
+        private SnapshotRestoreService _snapshotRestoreService;
         private readonly ObservableCollection<SnapshotListItem> _snapshotItems = new();
         private readonly MailboxPermissionService _mailboxPermissionService;
-        private readonly GroupMembershipService _groupMembershipService;
-        private readonly BookingsService _bookingsService;
+        private GroupMembershipService _groupMembershipService;
+        private BookingsService _bookingsService;
         private readonly RecipientLookupService _recipientLookupService;
         private readonly ReportingService _reportingService;
         private readonly SharedMailboxService _sharedMailboxService;
-        private readonly GroupCreationService _groupCreationService;
+        private GroupCreationService _groupCreationService;
         private readonly GroupSettingsService _groupSettingsService;
         private ServiceNowService? _serviceNowService;
         private readonly ObservableCollection<ReportRow> _reportResults = new();
         private double _lastExpandedOutputHeight = 220;
         private bool _outputCollapsed;
-        private bool _showWarnings;
+        private bool _showWarnings = true;
+        private string? _loadedGroupSettingsIdentity;
+        private bool _operationInProgress;
+        private System.Threading.CancellationTokenSource? _operationCancellation;
+        private readonly List<Control> _disabledOperationControls = new();
 
         public MainWindow()
         {
@@ -65,8 +69,15 @@ namespace EXOKit
             AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "toolbox.ico"));
             ApplyDarkTitleBar();
 
-            _config = ConfigService.Load();
-            _authService = new AuthService(_config.Settings.GraphApi.Scopes.ToArray(), GetWindowHandle);
+            string? configError = null;
+            try { _config = ConfigService.Load(); }
+            catch (Exception exception)
+            {
+                _config = ConfigService.CreateDefault();
+                configError = exception.Message;
+            }
+            _snapshotService.TenantIdProvider = () => _exo.ConnectedTenantId;
+            _authService = new AuthService(_config.Settings.GraphApi.Scopes.ToArray(), GetWindowHandle, _config.Settings.GraphApi.ClientId, _config.Settings.GraphApi.TenantId);
             _graphService = new GraphService(_authService, _config.Settings.GraphApi.Scopes.ToArray());
             _mailboxPermissionService = new MailboxPermissionService(_exo, _snapshotService);
             _groupMembershipService = new GroupMembershipService(_exo, _graphService, _snapshotService);
@@ -77,7 +88,7 @@ namespace EXOKit
             _sharedMailboxService = new SharedMailboxService(_exo);
             _groupCreationService = new GroupCreationService(_exo, _graphService);
             _groupSettingsService = new GroupSettingsService(_exo, _snapshotService);
-            _serviceNowService = _config.Settings.ServiceNow != null ? new ServiceNowService(_config.Settings.ServiceNow) : null;
+            _serviceNowService = _config.Settings.ServiceNow != null ? new ServiceNowService(_config.Settings.ServiceNow, _config.Settings.GraphApi) : null;
 
             ListViewReportResults.ItemsSource = _reportResults;
             ListViewSnapshots.ItemsSource = _snapshotItems;
@@ -85,12 +96,118 @@ namespace EXOKit
             LoadSettingsIntoUi();
 
             Logger.LogEntryWritten += OnLogEntryWritten;
-            Closed += (_, _) => Logger.LogEntryWritten -= OnLogEntryWritten;
+            TextBoxGroupSettingsIdentity.TextChanged += (_, _) => _loadedGroupSettingsIdentity = null;
+            if (configError != null)
+            {
+                Logger.Log($"Configuration could not be loaded: {configError}. Correct and save Settings; the original file is preserved as config.json.bak on save.", LogType.Error);
+                MainNavigationView.SelectedItem = NavItemSettings;
+            }
+            Closed += async (_, _) =>
+            {
+                Logger.LogEntryWritten -= OnLogEntryWritten;
+                try { await _exo.ShutdownAsync(); }
+                catch (Exception exception) { Logger.Log($"Session shutdown: {exception.Message}", LogType.Warning); }
+            };
 
             UpdateConnectionStatus();
+            var version = GetAppVersion();
+            Title = $"EXOKit v{version}";
+            TextBlockVersion.Text = $"Version {version}";
+            AppWindow.Closing += (_, args) => args.Cancel = _operationInProgress;
         }
 
+        private static string GetAppVersion()
+        {
+            try
+            {
+                var version = Windows.ApplicationModel.Package.Current.Id.Version;
+                return $"{version.Major}.{version.Minor}.{version.Build}";
+            }
+            catch (Exception exception) when (exception is InvalidOperationException or COMException)
+            {
+                return System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "development";
+            }
+        }
+
+        private async Task RunUiOperationAsync(Func<Task> operation)
+        {
+            if (_operationInProgress) return;
+            _operationInProgress = true;
+            _operationCancellation = new System.Threading.CancellationTokenSource();
+            _exo.OperationCancellationToken = _operationCancellation.Token;
+            _authService.OperationCancellationToken = _operationCancellation.Token;
+            ButtonCancelOperation.Visibility = Visibility.Visible;
+            SetOperationControlsEnabled(false);
+            try { await operation(); }
+            catch (OperationCanceledException)
+            {
+                Logger.Log("Operation cancelled. Applied changes are not rolled back; review results and recovery snapshots before retrying.", LogType.Warning);
+            }
+            catch (Exception exception)
+            {
+                Logger.Log($"Operation stopped: {exception.Message}. Review applied changes before retrying.", LogType.Error);
+                await ShowMessageAsync(exception.Message, "Operation Failed");
+            }
+            finally
+            {
+                _operationInProgress = false;
+                _exo.OperationCancellationToken = default;
+                _authService.OperationCancellationToken = default;
+                _operationCancellation.Dispose();
+                _operationCancellation = null;
+                ButtonCancelOperation.Visibility = Visibility.Collapsed;
+                SetOperationControlsEnabled(true);
+                UpdateConnectionStatus();
+            }
+        }
+
+        private async void ButtonCheckUpdates_Click(object sender, RoutedEventArgs args) =>
+            await RunUiOperationAsync(async () =>
+            {
+                var feed = _config.Settings.UpdateFeedUrl;
+                if (!Uri.TryCreate(feed, UriKind.Absolute, out var uri) || uri.Scheme != "https" || !string.IsNullOrEmpty(uri.UserInfo))
+                    throw new InvalidOperationException("Configure a trusted HTTPS .appinstaller feed in Settings first.");
+                if (!await ShowConfirmAsync($"Open the update feed at {uri.Host}? Windows App Installer will validate the package signature.", "Check for Updates")) return;
+                await Windows.System.Launcher.LaunchUriAsync(uri);
+            });
+
         private IntPtr GetWindowHandle() => WindowNative.GetWindowHandle(this);
+
+        private void ButtonCancelOperation_Click(object sender, RoutedEventArgs args)
+        {
+            _operationCancellation?.Cancel();
+            Logger.Log("Cancellation requested. Waiting for the active service call to finish; applied changes will not be rolled back.", LogType.Warning);
+        }
+
+        private void SetOperationControlsEnabled(bool enabled)
+        {
+            if (enabled)
+            {
+                foreach (var control in _disabledOperationControls) control.IsEnabled = true;
+                _disabledOperationControls.Clear();
+                return;
+            }
+
+            void DisableControls(DependencyObject parent)
+            {
+                if (parent is Control control)
+                {
+                    if (control.IsEnabled)
+                    {
+                        _disabledOperationControls.Add(control);
+                        control.IsEnabled = false;
+                    }
+                    return;
+                }
+                for (var index = 0; index < VisualTreeHelper.GetChildrenCount(parent); index++)
+                    DisableControls(VisualTreeHelper.GetChild(parent, index));
+            }
+
+            DisableControls(OperationPanels);
+            DisableControls(ConnectionControls);
+            DisableControls(TextBoxServiceNowTicketNumber);
+            foreach (var item in MainNavigationView.MenuItems.OfType<NavigationViewItem>()) DisableControls(item);
+        }
 
         private static readonly Regex DeviceCodeLineRegex = new(
             @"^(?<prefix>\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]\s*)?To sign in, use a web browser to open the page (?<url>\S+) and enter the code (?<code>\S+) to authenticate\.$",
@@ -118,6 +235,7 @@ namespace EXOKit
         /// </summary>
         private void CheckBoxShowWarnings_Changed(object sender, RoutedEventArgs e)
         {
+            if (CheckBoxShowWarnings == null || TextBlockLog == null || LogScrollViewer == null) return;
             _showWarnings = CheckBoxShowWarnings.IsChecked == true;
 
             TextBlockLog.Inlines.Clear();
@@ -188,10 +306,6 @@ namespace EXOKit
                 TicketNotesScrollViewer.UpdateLayout();
                 TicketNotesScrollViewer.ChangeView(null, TicketNotesScrollViewer.ScrollableHeight, null, true);
 
-                if (line.Contains("---------------------"))
-                {
-                    _ = TryAutoCloseServiceNowTicketAsync();
-                }
             }
         }
 
@@ -271,6 +385,7 @@ namespace EXOKit
 
         private async Task TryAutoCloseServiceNowTicketAsync()
         {
+            _operationCancellation?.Token.ThrowIfCancellationRequested();
             var ticketNumber = TextBoxServiceNowTicketNumber.Text.Trim();
             if (string.IsNullOrWhiteSpace(ticketNumber) || _serviceNowService == null)
             {
@@ -284,6 +399,7 @@ namespace EXOKit
             }
 
             var notesText = string.Join(Environment.NewLine, notes);
+            if (!await ShowConfirmAsync($"Close ticket '{ticketNumber}' with these verified operation notes?\n\n{notesText}", "Confirm Ticket Closure")) return;
             Logger.Log($"[ServiceNow] Attempting to update ticket '{ticketNumber}'...", LogType.Info);
             try
             {
@@ -353,7 +469,7 @@ namespace EXOKit
                     PanelCreateMailbox.Visibility = Visibility.Visible;
                     if (ComboBoxNewMbDomain.ItemsSource == null)
                     {
-                        _ = RefreshAcceptedDomainsAsync();
+                        _ = RunUiOperationAsync(RefreshAcceptedDomainsAsync);
                     }
                     break;
                 case "Resources":
@@ -366,7 +482,7 @@ namespace EXOKit
                     PanelCreateGroup.Visibility = Visibility.Visible;
                     if (ComboBoxNewGroupDomain.ItemsSource == null)
                     {
-                        _ = RefreshAcceptedDomainsAsync();
+                        _ = RunUiOperationAsync(RefreshAcceptedDomainsAsync);
                     }
                     break;
                 case "GroupSettings":
@@ -406,6 +522,9 @@ namespace EXOKit
         private async void ButtonBrowseNewGroupMembers_Click(object sender, RoutedEventArgs e) => await ImportListFromFileAsync(TextBoxNewGroupMembers);
 
         private async Task ImportListFromFileAsync(TextBox targetBox)
+            => await RunUiOperationAsync(() => ImportListCoreAsync(targetBox));
+
+        private async Task ImportListCoreAsync(TextBox targetBox)
         {
             var picker = new FileOpenPicker();
             InitializeWithWindow.Initialize(picker, GetWindowHandle());
@@ -421,12 +540,13 @@ namespace EXOKit
 
             try
             {
-                var lines = await FileIO.ReadLinesAsync(file);
-                var values = lines
-                    .SelectMany(line => line.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries))
-                    .Select(v => v.Trim())
-                    .Where(v => !string.IsNullOrWhiteSpace(v))
-                    .ToArray();
+                using var reader = new StringReader(await FileIO.ReadTextAsync(file));
+                using var parser = new Microsoft.VisualBasic.FileIO.TextFieldParser(reader);
+                parser.SetDelimiters(",", ";");
+                parser.HasFieldsEnclosedInQuotes = true;
+                var imported = new List<string>();
+                while (!parser.EndOfData) imported.AddRange(parser.ReadFields() ?? Array.Empty<string>());
+                var values = imported.Select(value => value.Trim()).Where(value => !string.IsNullOrEmpty(value)).ToArray();
 
                 if (values.Length == 0)
                 {
@@ -459,14 +579,20 @@ namespace EXOKit
         // --- Connection handlers ---
 
         private async void ButtonConnectExo_Click(object sender, RoutedEventArgs e)
+            => await RunUiOperationAsync(ConnectExoAsync);
+
+        private async Task ConnectExoAsync()
         {
             ButtonConnectExo.IsEnabled = false;
-            await _exo.ConnectAsync();
+            await _exo.ConnectAsync(CheckBoxExoBrowserSignIn.IsChecked == true);
             UpdateConnectionStatus();
             await RefreshAcceptedDomainsAsync();
         }
 
         private async void ButtonConnectGraph_Click(object sender, RoutedEventArgs e)
+            => await RunUiOperationAsync(ConnectGraphAsync);
+
+        private async Task ConnectGraphAsync()
         {
             if (!_exo.IsConnected)
             {
@@ -475,28 +601,52 @@ namespace EXOKit
             }
 
             ButtonConnectGraph.IsEnabled = false;
+            if (!string.Equals(_exo.ConnectedTenantId, _config.Settings.GraphApi.TenantId, StringComparison.OrdinalIgnoreCase)
+                || string.IsNullOrWhiteSpace(_exo.ConnectedTenantId))
+            {
+                await ShowMessageAsync("The EXO tenant must match the Graph TenantId in Settings. Disconnect and reconnect to the intended tenant.", "Tenant Mismatch");
+                UpdateConnectionStatus();
+                return;
+            }
             var connected = await _authService.ConnectGraphAsync();
             if (connected)
             {
-                _graphService.InitializeGraphClient();
+                try
+                {
+                    _graphService.InitializeGraphClient();
+                    await _graphService.VerifyConnectionAsync();
+                    await _exo.GetAcceptedDomainsAsync();
+                    Logger.Log("Exchange Online and Microsoft Graph read checks passed with both sessions connected.", LogType.Success);
+                }
+                catch
+                {
+                    await _authService.DisconnectGraphAsync();
+                    UpdateConnectionStatus();
+                    Logger.Log("Combined EXO/Graph connection check failed. Graph was disconnected; verify Exchange access before continuing.", LogType.Error);
+                    throw;
+                }
             }
             UpdateConnectionStatus();
         }
 
         private async void ButtonDisconnect_Click(object sender, RoutedEventArgs e)
+            => await RunUiOperationAsync(DisconnectAsync);
+
+        private async Task DisconnectAsync()
         {
             await _exo.DisconnectAsync();
             await _authService.DisconnectGraphAsync();
+            _loadedGroupSettingsIdentity = null;
             UpdateConnectionStatus();
         }
 
         // --- Mailbox permission handlers ---
 
         private async void ButtonValidateMailboxes_Click(object sender, RoutedEventArgs e) =>
-            await ValidateTargetsAndUsersAsync(TextBoxSharedMailboxes, TextBoxMailboxUsers, PermissionTargetType.Mailbox);
+            await RunUiOperationAsync(() => ValidateTargetsAndUsersAsync(TextBoxSharedMailboxes, TextBoxMailboxUsers, PermissionTargetType.Mailbox));
 
         private async void ButtonValidateResources_Click(object sender, RoutedEventArgs e) =>
-            await ValidateTargetsAndUsersAsync(TextBoxResourceMailboxes, TextBoxResourceUsers, PermissionTargetType.Resource);
+            await RunUiOperationAsync(() => ValidateTargetsAndUsersAsync(TextBoxResourceMailboxes, TextBoxResourceUsers, PermissionTargetType.Resource));
 
         private async Task ValidateTargetsAndUsersAsync(TextBox targetsBox, TextBox usersBox, PermissionTargetType targetType)
         {
@@ -588,6 +738,12 @@ namespace EXOKit
             PermissionOperationType operationType, PermissionTargetType targetType,
             TextBox targetsBox, TextBox usersBox, CheckBox fullAccessBox, CheckBox sendAsBox, CheckBox sendOnBehalfBox,
             Button addButton, Button removeButton)
+            => await RunUiOperationAsync(() => RunMailboxPermissionCoreAsync(operationType, targetType, targetsBox, usersBox, fullAccessBox, sendAsBox, sendOnBehalfBox, addButton, removeButton));
+
+        private async Task RunMailboxPermissionCoreAsync(
+            PermissionOperationType operationType, PermissionTargetType targetType,
+            TextBox targetsBox, TextBox usersBox, CheckBox fullAccessBox, CheckBox sendAsBox, CheckBox sendOnBehalfBox,
+            Button addButton, Button removeButton)
         {
             if (!_exo.IsConnected)
             {
@@ -624,7 +780,9 @@ namespace EXOKit
             removeButton.IsEnabled = false;
             try
             {
-                await _mailboxPermissionService.InvokePermissionOperationAsync(operationType, targetType, targets, users, permissions);
+                var results = await _mailboxPermissionService.InvokePermissionOperationAsync(operationType, targetType, targets, users, permissions);
+                if (results.Count == targets.Length * users.Length && results.All(result => result.Statuses.Count > 0 && result.Statuses.All(IsVerifiedStatus)))
+                    await TryAutoCloseServiceNowTicketAsync();
                 targetsBox.Text = string.Empty;
                 usersBox.Text = string.Empty;
             }
@@ -644,6 +802,9 @@ namespace EXOKit
             await RunGroupMembershipOperationAsync(PermissionOperationType.Remove);
 
         private async Task RunGroupMembershipOperationAsync(PermissionOperationType operationType)
+            => await RunUiOperationAsync(() => RunGroupMembershipCoreAsync(operationType));
+
+        private async Task RunGroupMembershipCoreAsync(PermissionOperationType operationType)
         {
             var exoConnected = _exo.IsConnected;
             var graphConnected = _authService.IsGraphConnected;
@@ -681,7 +842,9 @@ namespace EXOKit
             ButtonRemoveMembership.IsEnabled = false;
             try
             {
-                await _groupMembershipService.InvokeGroupMembershipOperationAsync(operationType, groups, users, roles, exoConnected, graphConnected);
+                var results = await _groupMembershipService.InvokeGroupMembershipOperationAsync(operationType, groups, users, roles, exoConnected, graphConnected);
+                if (results.Count == groups.Length * users.Length && results.All(result => result.Statuses.Count > 0 && result.Statuses.All(IsVerifiedStatus)))
+                    await TryAutoCloseServiceNowTicketAsync();
                 TextBoxGroups.Text = string.Empty;
                 TextBoxGroupUsers.Text = string.Empty;
             }
@@ -695,6 +858,9 @@ namespace EXOKit
         // --- Group Settings handlers (Distribution Groups / Mail-Enabled Security Groups only) ---
 
         private async void ButtonLoadGroupSettings_Click(object sender, RoutedEventArgs e)
+            => await RunUiOperationAsync(LoadGroupSettingsAsync);
+
+        private async Task LoadGroupSettingsAsync()
         {
             if (!_exo.IsConnected)
             {
@@ -710,6 +876,7 @@ namespace EXOKit
             }
 
             ButtonLoadGroupSettings.IsEnabled = false;
+            _loadedGroupSettingsIdentity = null;
             try
             {
                 var snapshot = await _groupSettingsService.LoadSettingsAsync(identity);
@@ -737,6 +904,10 @@ namespace EXOKit
                 RadioGroupSettingsJoinApproval.IsChecked = string.Equals(snapshot.JoinRestriction, "ApprovalRequired", StringComparison.OrdinalIgnoreCase);
                 RadioGroupSettingsLeaveOpen.IsChecked = string.Equals(snapshot.DepartRestriction, "Open", StringComparison.OrdinalIgnoreCase);
                 RadioGroupSettingsLeaveClosed.IsChecked = string.Equals(snapshot.DepartRestriction, "Closed", StringComparison.OrdinalIgnoreCase);
+                if (string.Equals(identity, TextBoxGroupSettingsIdentity.Text.Trim(), StringComparison.OrdinalIgnoreCase))
+                {
+                    _loadedGroupSettingsIdentity = identity;
+                }
             }
             finally
             {
@@ -747,10 +918,14 @@ namespace EXOKit
         private bool TryGetGroupSettingsIdentity(out string identity)
         {
             identity = TextBoxGroupSettingsIdentity.Text.Trim();
-            return !string.IsNullOrEmpty(identity);
+            return !string.IsNullOrEmpty(identity)
+                && string.Equals(identity, _loadedGroupSettingsIdentity, StringComparison.OrdinalIgnoreCase);
         }
 
         private async void ButtonSaveDeliveryManagement_Click(object sender, RoutedEventArgs e)
+            => await RunUiOperationAsync(SaveDeliveryManagementAsync);
+
+        private async Task SaveDeliveryManagementAsync()
         {
             if (!_exo.IsConnected)
             {
@@ -778,6 +953,9 @@ namespace EXOKit
         }
 
         private async void ButtonSaveDelegates_Click(object sender, RoutedEventArgs e)
+            => await RunUiOperationAsync(SaveDelegatesAsync);
+
+        private async Task SaveDelegatesAsync()
         {
             if (!_exo.IsConnected)
             {
@@ -793,6 +971,8 @@ namespace EXOKit
             var sendAsDelegates = InputParsingHelpers.ConvertToInputList(TextBoxDelegatesSendAs.Text);
             var sendOnBehalfDelegates = InputParsingHelpers.ConvertToInputList(TextBoxDelegatesSendOnBehalf.Text);
 
+            if (!await ShowConfirmAsync($"Replace delegates on '{identity}' with the displayed lists? Delegates omitted from these lists will be removed.", "Confirm Delegate Changes")) return;
+
             ButtonSaveDelegates.IsEnabled = false;
             try
             {
@@ -805,6 +985,9 @@ namespace EXOKit
         }
 
         private async void ButtonSaveMessageApproval_Click(object sender, RoutedEventArgs e)
+            => await RunUiOperationAsync(SaveMessageApprovalAsync);
+
+        private async Task SaveMessageApprovalAsync()
         {
             if (!_exo.IsConnected)
             {
@@ -834,6 +1017,9 @@ namespace EXOKit
         }
 
         private async void ButtonSaveMembershipApproval_Click(object sender, RoutedEventArgs e)
+            => await RunUiOperationAsync(SaveMembershipApprovalAsync);
+
+        private async Task SaveMembershipApprovalAsync()
         {
             if (!_exo.IsConnected)
             {
@@ -863,6 +1049,9 @@ namespace EXOKit
         // --- Bookings handler ---
 
         private async void ButtonEnableBookings_Click(object sender, RoutedEventArgs e)
+            => await RunUiOperationAsync(EnableBookingsAsync);
+
+        private async Task EnableBookingsAsync()
         {
             if (!_exo.IsConnected)
             {
@@ -897,6 +1086,9 @@ namespace EXOKit
         // --- Recipient lookup handler ---
 
         private async void ButtonCheckRecipient_Click(object sender, RoutedEventArgs e)
+            => await RunUiOperationAsync(CheckRecipientAsync);
+
+        private async Task CheckRecipientAsync()
         {
             if (!_exo.IsConnected)
             {
@@ -932,6 +1124,9 @@ namespace EXOKit
         }
 
         private async void ButtonValidateReportingIdentity_Click(object sender, RoutedEventArgs e)
+            => await RunUiOperationAsync(ValidateReportingIdentityAsync);
+
+        private async Task ValidateReportingIdentityAsync()
         {
             if (!_exo.IsConnected)
             {
@@ -987,6 +1182,9 @@ namespace EXOKit
         }
 
         private async void ButtonGenerateObjectReport_Click(object sender, RoutedEventArgs e)
+            => await RunUiOperationAsync(GenerateObjectReportAsync);
+
+        private async Task GenerateObjectReportAsync()
         {
             if (!_exo.IsConnected)
             {
@@ -1043,6 +1241,9 @@ namespace EXOKit
         }
 
         private async void ButtonGetMailboxDelegates_Click(object sender, RoutedEventArgs e)
+            => await RunUiOperationAsync(GetMailboxDelegatesAsync);
+
+        private async Task GetMailboxDelegatesAsync()
         {
             if (!_exo.IsConnected)
             {
@@ -1099,6 +1300,9 @@ namespace EXOKit
         }
 
         private async void ButtonExportReportCsv_Click(object sender, RoutedEventArgs e)
+            => await RunUiOperationAsync(ExportReportCsvAsync);
+
+        private async Task ExportReportCsvAsync()
         {
             if (_reportResults.Count == 0)
             {
@@ -1134,6 +1338,7 @@ namespace EXOKit
 
         private static string CsvEscape(string value)
         {
+            if (!string.IsNullOrEmpty(value) && ("=+-@".Contains(value.TrimStart().FirstOrDefault()) || value[0] is '\t' or '\r' or '\n')) value = "'" + value;
             if (value.Contains(',') || value.Contains('"') || value.Contains('\n'))
             {
                 return "\"" + value.Replace("\"", "\"\"") + "\"";
@@ -1170,6 +1375,9 @@ namespace EXOKit
         }
 
         private async void ButtonDeleteSnapshot_Click(object sender, RoutedEventArgs e)
+            => await RunUiOperationAsync(DeleteSnapshotAsync);
+
+        private async Task DeleteSnapshotAsync()
         {
             if (ListViewSnapshots.SelectedItem is not SnapshotListItem selected)
             {
@@ -1207,6 +1415,9 @@ namespace EXOKit
         }
 
         private async void ButtonClearAllSnapshots_Click(object sender, RoutedEventArgs e)
+            => await RunUiOperationAsync(ClearAllSnapshotsAsync);
+
+        private async Task ClearAllSnapshotsAsync()
         {
             if (_snapshotItems.Count == 0)
             {
@@ -1264,7 +1475,11 @@ namespace EXOKit
         }
 
         private async void ButtonRestoreSnapshot_Click(object sender, RoutedEventArgs e)
+            => await RunUiOperationAsync(RestoreSnapshotAsync);
+
+        private async Task RestoreSnapshotAsync()
         {
+            if (!_exo.IsConnected) throw new InvalidOperationException("Connect Exchange Online before restoring a snapshot.");
             if (ListViewSnapshots.SelectedItem is not SnapshotListItem selected)
             {
                 return;
@@ -1308,6 +1523,9 @@ namespace EXOKit
         // --- Ticket notes ---
 
         private async void ButtonCopyTicketNotes_Click(object sender, RoutedEventArgs e)
+            => await RunUiOperationAsync(CopyTicketNotesAsync);
+
+        private async Task CopyTicketNotesAsync()
         {
             var count = Logger.CopyLastTicketNotesToClipboard();
             if (count == 0)
@@ -1322,7 +1540,7 @@ namespace EXOKit
 
         // --- Create Shared Mailbox ---
 
-        private async void ButtonRefreshDomains_Click(object sender, RoutedEventArgs e) => await RefreshAcceptedDomainsAsync();
+        private async void ButtonRefreshDomains_Click(object sender, RoutedEventArgs e) => await RunUiOperationAsync(RefreshAcceptedDomainsAsync);
 
         private async Task RefreshAcceptedDomainsAsync()
         {
@@ -1363,6 +1581,9 @@ namespace EXOKit
         }
 
         private async void ButtonCreateSharedMailbox_Click(object sender, RoutedEventArgs e)
+            => await RunUiOperationAsync(CreateSharedMailboxAsync);
+
+        private async Task CreateSharedMailboxAsync()
         {
             if (!_exo.IsConnected)
             {
@@ -1416,7 +1637,7 @@ namespace EXOKit
                 }
                 else
                 {
-                    await ShowMessageAsync($"Failed to create shared mailbox '{email}'. See log for details.", "Creation Failed");
+                    await ShowMessageAsync($"Mailbox workflow did not fully complete for '{email}'. The mailbox may already exist; review the results before retrying.", "Incomplete Creation");
                 }
             }
             catch (Exception ex)
@@ -1451,15 +1672,20 @@ namespace EXOKit
 
             PanelNewGroupCommunication.Visibility = (isDistribution || isSecurity) ? Visibility.Visible : Visibility.Collapsed;
             PanelNewGroupJoinLeave.Visibility = isDistribution ? Visibility.Visible : Visibility.Collapsed;
-            PanelNewGroupApproval.Visibility = isSecurity ? Visibility.Visible : Visibility.Collapsed;
+            PanelNewGroupApproval.Visibility = Visibility.Collapsed;
         }
 
-        private async void ButtonRefreshGroupDomains_Click(object sender, RoutedEventArgs e) => await RefreshAcceptedDomainsAsync();
+        private async void ButtonRefreshGroupDomains_Click(object sender, RoutedEventArgs e) => await RunUiOperationAsync(RefreshAcceptedDomainsAsync);
 
         private async void ButtonCreateGroup_Click(object sender, RoutedEventArgs e)
+            => await RunUiOperationAsync(CreateGroupAsync);
+
+        private async Task CreateGroupAsync()
         {
             var isM365 = RadioNewGroupM365.IsChecked == true;
             var isSecurity = RadioNewGroupSecurity.IsChecked == true;
+            if (isM365 && CheckBoxNewGroupCreateTeam.IsChecked == true && !_authService.IsGraphConnected)
+                throw new InvalidOperationException("Connect Microsoft Graph before creating a group with a Team.");
 
             if (!_exo.IsConnected)
             {
@@ -1530,7 +1756,7 @@ namespace EXOKit
                 }
                 else
                 {
-                    await ShowMessageAsync($"Failed to create {kindLabel} '{email}'. See log for details.", "Creation Failed");
+                    await ShowMessageAsync($"Group workflow did not fully complete for '{email}'. The group may already exist; review the results before retrying.", "Incomplete Creation");
                 }
             }
             catch (Exception ex)
@@ -1546,11 +1772,28 @@ namespace EXOKit
 
         // --- Settings ---
 
+        private async void ButtonResumeTeam_Click(object sender, RoutedEventArgs args) => await RunUiOperationAsync(async () =>
+        {
+            if (!_exo.IsConnected || !_authService.IsGraphConnected || _exo.ConnectedTenantId != _authService.ConnectedTenantId)
+                throw new InvalidOperationException("Connect EXO and Graph to the same tenant first.");
+            var identity = TextBoxExistingTeamGroup.Text.Trim();
+            if (string.IsNullOrEmpty(identity)) throw new InvalidOperationException("Enter the existing Microsoft 365 group email or object ID.");
+            var groupId = await _graphService.ResolveM365GroupIdAsync(identity) ?? throw new InvalidOperationException("Microsoft 365 group not found.");
+            if (!await ShowConfirmAsync($"Provision a Team for existing group '{identity}' ({groupId})?", "Resume Team Provisioning")) return;
+            await _graphService.CreateTeamFromGroupAsync(groupId);
+            Logger.Log($"Team is provisioned for group '{identity}' ({groupId}).", LogType.Success);
+        });
+
         private void LoadSettingsIntoUi()
         {
+            CheckBoxExoBrowserSignIn.IsChecked = _config.Settings.ExoUseBrowserSignIn;
             TextBoxSettingsBookingsGroup.Text = _config.Settings.LicenseGroups.Bookings.GroupName;
+            TextBoxSettingsBookingsGroupId.Text = _config.Settings.LicenseGroups.Bookings.GroupId ?? string.Empty;
             TextBoxSettingsOwaPolicy.Text = _config.Settings.OwaPolicies.BookingsCreators;
             TextBoxSettingsGraphScopes.Text = string.Join(Environment.NewLine, _config.Settings.GraphApi.Scopes);
+            TextBoxSettingsClientId.Text = _config.Settings.GraphApi.ClientId;
+            TextBoxSettingsTenantId.Text = _config.Settings.GraphApi.TenantId;
+            TextBoxSettingsUpdateFeed.Text = _config.Settings.UpdateFeedUrl;
 
             var serviceNow = _config.Settings.ServiceNow;
             CheckBoxSettingsServiceNowEnabled.IsChecked = serviceNow?.Enabled ?? false;
@@ -1562,12 +1805,24 @@ namespace EXOKit
         }
 
         private async void ButtonSaveSettings_Click(object sender, RoutedEventArgs e)
+            => await RunUiOperationAsync(SaveSettingsAsync);
+
+        private async Task SaveSettingsAsync()
         {
             var bookingsGroupName = TextBoxSettingsBookingsGroup.Text.Trim();
+            var bookingsGroupId = TextBoxSettingsBookingsGroupId.Text.Trim();
+            if (!string.IsNullOrEmpty(bookingsGroupId) && !Guid.TryParse(bookingsGroupId, out _)) throw new InvalidOperationException("Bookings Group Object ID must be a GUID.");
             var owaPolicy = TextBoxSettingsOwaPolicy.Text.Trim();
             var scopes = InputParsingHelpers.ConvertToInputList(TextBoxSettingsGraphScopes.Text).ToList();
+            var clientId = TextBoxSettingsClientId.Text.Trim();
+            var tenantId = TextBoxSettingsTenantId.Text.Trim();
+            if (!Guid.TryParse(clientId, out _) || !Guid.TryParse(tenantId, out _))
+            {
+                await ShowMessageAsync("Enter valid application and tenant GUIDs for the EXOKit app registration.", "Invalid Graph Configuration");
+                return;
+            }
 
-            if (string.IsNullOrEmpty(bookingsGroupName) || string.IsNullOrEmpty(owaPolicy) || scopes.Count == 0)
+            if ((string.IsNullOrEmpty(bookingsGroupName) && string.IsNullOrEmpty(bookingsGroupId)) || string.IsNullOrEmpty(owaPolicy) || scopes.Count == 0)
             {
                 TextBlockSettingsStatus.Text = "Bookings Group Name, OWA Policy, and at least one Graph scope are required.";
                 await ShowMessageAsync("Bookings Group Name, OWA Policy, and at least one Graph scope are required.", "Input Missing");
@@ -1607,7 +1862,7 @@ namespace EXOKit
                 ButtonSaveSettings.IsEnabled = false;
                 try
                 {
-                    var testResult = await new ServiceNowService(candidateConfig).TestConnectionAsync();
+                    var testResult = await new ServiceNowService(candidateConfig, new GraphApiConfig { ClientId = clientId, TenantId = tenantId }).TestConnectionAsync();
                     if (!testResult.Success)
                     {
                         TextBlockSettingsStatus.Text = $"ServiceNow validation failed: {testResult.Message}";
@@ -1621,15 +1876,22 @@ namespace EXOKit
                 }
             }
 
-            // Mutate the existing config object in place so already-constructed services
-            // (which captured _config by reference) see the updated values immediately.
-            _config.Settings.LicenseGroups.Bookings.GroupName = bookingsGroupName;
-            _config.Settings.OwaPolicies.BookingsCreators = owaPolicy;
-            _config.Settings.GraphApi.Scopes = scopes;
+            var candidate = System.Text.Json.JsonSerializer.Deserialize<ToolConfig>(System.Text.Json.JsonSerializer.Serialize(_config))!;
+            candidate.Settings.LicenseGroups.Bookings.GroupName = bookingsGroupName;
+            candidate.Settings.ExoUseBrowserSignIn = CheckBoxExoBrowserSignIn.IsChecked == true;
+            candidate.Settings.LicenseGroups.Bookings.GroupId = bookingsGroupId;
+            candidate.Settings.OwaPolicies.BookingsCreators = owaPolicy;
+            candidate.Settings.GraphApi.Scopes = scopes;
+            candidate.Settings.GraphApi.ClientId = clientId;
+            candidate.Settings.GraphApi.TenantId = tenantId;
+            candidate.Settings.UpdateFeedUrl = TextBoxSettingsUpdateFeed.Text.Trim();
+            if (!string.IsNullOrEmpty(candidate.Settings.UpdateFeedUrl)
+                && (!Uri.TryCreate(candidate.Settings.UpdateFeedUrl, UriKind.Absolute, out var feedUri) || feedUri.Scheme != "https" || !string.IsNullOrEmpty(feedUri.UserInfo)))
+                throw new InvalidOperationException("Update feed must be an HTTPS URL without embedded credentials.");
 
             if (serviceNowEnabled || !string.IsNullOrEmpty(instanceUrl) || !string.IsNullOrEmpty(keyVaultUrl))
             {
-                var serviceNow = _config.Settings.ServiceNow ??= new ServiceNowConfig();
+                var serviceNow = candidate.Settings.ServiceNow ??= new ServiceNowConfig();
                 serviceNow.Enabled = serviceNowEnabled;
                 serviceNow.InstanceUrl = instanceUrl;
                 serviceNow.KeyVaultUrl = keyVaultUrl;
@@ -1639,18 +1901,23 @@ namespace EXOKit
             }
             else
             {
-                _config.Settings.ServiceNow = null;
+                candidate.Settings.ServiceNow = null;
             }
 
-            // Graph scopes changed, so the auth/graph services (which captured a snapshot array
-            // in their constructors) must be recreated to pick up the new scope list.
-            _authService = new AuthService(_config.Settings.GraphApi.Scopes.ToArray(), GetWindowHandle);
+            ConfigService.Save(candidate);
+            _config.Settings = candidate.Settings;
+            await _authService.DisconnectGraphAsync();
+            _authService = new AuthService(_config.Settings.GraphApi.Scopes.ToArray(), GetWindowHandle, clientId, tenantId);
             _graphService = new GraphService(_authService, _config.Settings.GraphApi.Scopes.ToArray());
-            _serviceNowService = _config.Settings.ServiceNow != null ? new ServiceNowService(_config.Settings.ServiceNow) : null;
+            _groupMembershipService = new GroupMembershipService(_exo, _graphService, _snapshotService);
+            _bookingsService = new BookingsService(_exo, _graphService, _config);
+            _groupCreationService = new GroupCreationService(_exo, _graphService);
+            _snapshotRestoreService = new SnapshotRestoreService(_exo, _graphService);
+            UpdateConnectionStatus();
+            _serviceNowService = _config.Settings.ServiceNow != null ? new ServiceNowService(_config.Settings.ServiceNow, _config.Settings.GraphApi) : null;
 
             try
             {
-                ConfigService.Save(_config);
                 TextBlockSettingsStatus.Text = $"Settings saved at {DateTime.Now:HH:mm:ss}.";
                 Logger.Log("Settings saved to config.json.", LogType.Success);
             }
@@ -1663,6 +1930,11 @@ namespace EXOKit
         }
 
         // --- Dialog helpers ---
+
+        private static bool IsVerifiedStatus(string status) =>
+            status.EndsWith("(Added)", StringComparison.Ordinal)
+            || status.EndsWith("(Removed)", StringComparison.Ordinal)
+            || status.EndsWith("(Already Exists)", StringComparison.Ordinal);
 
         private async Task ShowMessageAsync(string message, string title)
         {

@@ -43,7 +43,9 @@ namespace EXOKit.Services
             string? bookingsGroupId;
             try
             {
-                bookingsGroupId = await _graph.GetGroupIdByNameAsync(bookingsGroupName);
+                bookingsGroupId = _config.Settings.LicenseGroups.Bookings.GroupId;
+                if (string.IsNullOrWhiteSpace(bookingsGroupId))
+                    bookingsGroupId = await _graph.GetGroupIdByNameAsync(bookingsGroupName);
                 if (string.IsNullOrEmpty(bookingsGroupId))
                 {
                     throw new InvalidOperationException($"Group '{bookingsGroupName}' not found.");
@@ -91,7 +93,7 @@ namespace EXOKit.Services
                     }
                     else
                     {
-                        await _graph.AddGroupMemberAsync(bookingsGroupId, azureUserId);
+                        await PermissionVerification.ApplyAsync(() => _graph.AddGroupMemberAsync(bookingsGroupId, azureUserId), () => _graph.IsGroupMemberAsync(bookingsGroupId, azureUserId), true);
                         Logger.Log("    STATUS: Added to group.", LogType.Success);
                         userActions.Add("Added to Group");
                     }
@@ -114,6 +116,7 @@ namespace EXOKit.Services
                     else
                     {
                         await _exo.SetOwaMailboxPolicyAsync(userUpn, bookingsOwaPolicy);
+                        await PermissionVerification.ApplyAsync(() => Task.CompletedTask, async () => string.Equals(await _exo.GetOwaMailboxPolicyAsync(userUpn), bookingsOwaPolicy, StringComparison.OrdinalIgnoreCase), true);
                         Logger.Log("    STATUS: Set OWA policy.", LogType.Success);
                         userActions.Add("Policy Set");
                     }
