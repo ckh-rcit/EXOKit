@@ -18,6 +18,98 @@ namespace EXOKit.Tests
         public void Dispose() => Directory.Delete(_directory, true);
 
         [Fact]
+        public void RecipientInputPreservesNamesAndDeduplicatesInOrder()
+        {
+            Assert.Equal(new[] { "Finance Shared Mailbox", "user@example.org", "Doe, Jane" },
+                InputParsingHelpers.ConvertToRecipientList(" Finance Shared Mailbox\r\nuser@example.org\n\nUSER@example.org\nDoe, Jane\n"));
+        }
+
+        [Theory]
+        [InlineData("Identity")]
+        [InlineData("Recipient")]
+        [InlineData("Email")]
+        [InlineData("EmailAddress")]
+        [InlineData("PrimarySmtpAddress")]
+        [InlineData("UserPrincipalName")]
+        [InlineData("upn")]
+        public void RecipientCsvSelectsIdentityColumnAndSkipsHeader(string header)
+        {
+            Assert.Equal(new[] { "user@example.org" }, InputParsingHelpers.ParseRecipientFile(
+                $"DisplayName,{header}\n\"Doe, Jane\",user@example.org\nIgnored,USER@example.org\nEmpty,\n", true));
+        }
+
+        [Fact]
+        public void RecipientCsvSupportsHeaderlessQuotedNames()
+        {
+            Assert.Equal(new[] { "Doe, Jane", "Finance Shared Mailbox" },
+                InputParsingHelpers.ParseRecipientFile("\"Doe, Jane\"\nFinance Shared Mailbox", true));
+        }
+
+        [Fact]
+        public void RecipientCsvSupportsSemicolonDelimiter()
+        {
+            Assert.Equal(new[] { "user@example.org" },
+                InputParsingHelpers.ParseRecipientFile("Identity;Department\nuser@example.org;Finance", true));
+        }
+
+        [Theory]
+        [InlineData("Name,Department\nJane,Finance")]
+        [InlineData("Identity,Department\nuser@example.org")]
+        [InlineData("Identity\n\"Name\nwith newline\"")]
+        public void RecipientCsvRejectsAmbiguousOrMalformedRows(string content)
+        {
+            Assert.Throws<FormatException>(() => InputParsingHelpers.ParseRecipientFile(content, true));
+        }
+
+        [Fact]
+        public void RecipientFileHandlesTextAndEmptyFiles()
+        {
+            Assert.Equal(new[] { "Doe, Jane", "Finance Shared Mailbox" },
+                InputParsingHelpers.ParseRecipientFile("Doe, Jane\nFinance Shared Mailbox", false));
+            Assert.Empty(InputParsingHelpers.ParseRecipientFile("", true));
+            Assert.Empty(InputParsingHelpers.ConvertToRecipientList(" \r\n\t"));
+        }
+
+        [Theory]
+        [InlineData("invalid_client", "AADSTS7000218")]
+        [InlineData("invalid_resource", "AADSTS650057")]
+        public void KeyVaultFailureReportsNestedCodesWithoutSensitiveMessages(string errorCode, string entraCode)
+        {
+            var inner = new Microsoft.Identity.Client.MsalServiceException(errorCode,
+                $"{entraCode}: private-response https://localhost/?code=private-code")
+            {
+                CorrelationId = Tenant
+            };
+            var exception = new Azure.Identity.AuthenticationFailedException("private-wrapper",
+                new InvalidOperationException("private-intermediate", inner));
+
+            var message = ServiceNowService.DescribeKeyVaultFailure(exception);
+
+            Assert.Contains(errorCode, message);
+            Assert.Contains(entraCode, message);
+            Assert.Contains(Tenant, message);
+            Assert.DoesNotContain("private-", message);
+            Assert.DoesNotContain("?code=", message);
+        }
+
+        [Fact]
+        public void KeyVaultFailureReportsLocalCauseWithoutExposingItsMessage()
+        {
+            var exception = new Azure.Identity.AuthenticationFailedException("private-wrapper",
+                new System.Security.Cryptography.CryptographicException("private-cache-data"));
+            var message = ServiceNowService.DescribeKeyVaultFailure(exception);
+            Assert.Contains("CryptographicException", message);
+            Assert.DoesNotContain("private-", message);
+        }
+
+        [Fact]
+        public void KeyVaultFailurePreservesNonAuthenticationErrors()
+        {
+            Assert.Equal("Secret access denied", ServiceNowService.DescribeKeyVaultFailure(
+                new Azure.RequestFailedException(403, "Secret access denied")));
+        }
+
+        [Fact]
         public void HostedRunspaceCanImportLocalScriptModule()
         {
             var modulePath = Path.Combine(_directory, "PolicyProbe.psm1");

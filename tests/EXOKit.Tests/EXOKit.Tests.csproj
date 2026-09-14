@@ -16,6 +16,7 @@
     <Compile Include="..\..\Services\LoggerPSHost.cs" Link="Services\LoggerPSHost.cs" />
     <Compile Include="..\..\Services\PermissionVerification.cs" Link="Services\PermissionVerification.cs" />
     <Compile Include="..\..\Services\ConfigService.cs" Link="Services\ConfigService.cs" />
+    <Compile Include="..\..\Services\InputParsingHelpers.cs" Link="Services\InputParsingHelpers.cs" />
     <Compile Include="..\..\Services\SnapshotService.cs" Link="Services\SnapshotService.cs" />
     <Compile Include="..\..\Services\ServiceNowService.cs" Link="Services\ServiceNowService.cs" />
   </ItemGroup>

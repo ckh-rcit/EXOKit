@@ -54,6 +54,7 @@ namespace EXOKit
         private readonly GroupSettingsService _groupSettingsService;
         private ServiceNowService? _serviceNowService;
         private readonly ObservableCollection<ReportRow> _reportResults = new();
+        private readonly ObservableCollection<RecipientCheckResult> _recipientCheckResults = new();
         private double _lastExpandedOutputHeight = 220;
         private bool _outputCollapsed;
         private bool _showWarnings = true;
@@ -92,6 +93,7 @@ namespace EXOKit
             _serviceNowService = _config.Settings.ServiceNow != null ? new ServiceNowService(_config.Settings.ServiceNow, _config.Settings.GraphApi) : null;
 
             ListViewReportResults.ItemsSource = _reportResults;
+            ListViewRecipientResults.ItemsSource = _recipientCheckResults;
             ListViewSnapshots.ItemsSource = _snapshotItems;
 
             LoadSettingsIntoUi();
@@ -525,7 +527,7 @@ namespace EXOKit
         private async Task ImportListFromFileAsync(TextBox targetBox)
             => await RunUiOperationAsync(() => ImportListCoreAsync(targetBox));
 
-        private async Task ImportListCoreAsync(TextBox targetBox)
+        private async Task ImportListCoreAsync(TextBox targetBox, bool recipientIdentities = false)
         {
             var picker = new FileOpenPicker();
             InitializeWithWindow.Initialize(picker, GetWindowHandle());
@@ -541,13 +543,22 @@ namespace EXOKit
 
             try
             {
-                using var reader = new StringReader(await FileIO.ReadTextAsync(file));
-                using var parser = new Microsoft.VisualBasic.FileIO.TextFieldParser(reader);
-                parser.SetDelimiters(",", ";");
-                parser.HasFieldsEnclosedInQuotes = true;
-                var imported = new List<string>();
-                while (!parser.EndOfData) imported.AddRange(parser.ReadFields() ?? Array.Empty<string>());
-                var values = imported.Select(value => value.Trim()).Where(value => !string.IsNullOrEmpty(value)).ToArray();
+                var content = await FileIO.ReadTextAsync(file);
+                string[] values;
+                if (recipientIdentities)
+                {
+                    values = InputParsingHelpers.ParseRecipientFile(content, string.Equals(file.FileType, ".csv", StringComparison.OrdinalIgnoreCase));
+                }
+                else
+                {
+                    using var reader = new StringReader(content);
+                    using var parser = new Microsoft.VisualBasic.FileIO.TextFieldParser(reader);
+                    parser.SetDelimiters(",", ";");
+                    parser.HasFieldsEnclosedInQuotes = true;
+                    var imported = new List<string>();
+                    while (!parser.EndOfData) imported.AddRange(parser.ReadFields() ?? Array.Empty<string>());
+                    values = imported.Select(value => value.Trim()).Where(value => !string.IsNullOrEmpty(value)).ToArray();
+                }
 
                 if (values.Length == 0)
                 {
@@ -559,7 +570,9 @@ namespace EXOKit
                     ? string.Join(Environment.NewLine, values)
                     : targetBox.Text.TrimEnd() + Environment.NewLine + string.Join(Environment.NewLine, values);
 
-                targetBox.Text = combined;
+                targetBox.Text = recipientIdentities
+                    ? string.Join(Environment.NewLine, InputParsingHelpers.ConvertToRecipientList(combined))
+                    : combined;
                 Logger.Log($"Imported {values.Length} value(s) from '{file.Name}'.", LogType.Success);
             }
             catch (Exception ex)
@@ -1086,6 +1099,20 @@ namespace EXOKit
 
         // --- Recipient lookup handler ---
 
+        private async void ButtonBrowseRecipientIdentities_Click(object sender, RoutedEventArgs e)
+            => await RunUiOperationAsync(() => ImportListCoreAsync(TextBoxRecipientCheck, recipientIdentities: true));
+
+        private async void ButtonCopyRecipientResults_Click(object sender, RoutedEventArgs e)
+            => await RunUiOperationAsync(() =>
+            {
+                var data = new DataPackage();
+                data.SetText(string.Join(Environment.NewLine + Environment.NewLine,
+                    _recipientCheckResults.Select(result => $"Identity: {result.Identity}{Environment.NewLine}Type: {result.DisplayType}{Environment.NewLine}{result.LogMessage}")));
+                Clipboard.SetContent(data);
+                Logger.Log($"Copied {_recipientCheckResults.Count} recipient result(s).", LogType.Success);
+                return Task.CompletedTask;
+            });
+
         private async void ButtonCheckRecipient_Click(object sender, RoutedEventArgs e)
             => await RunUiOperationAsync(CheckRecipientAsync);
 
@@ -1097,15 +1124,40 @@ namespace EXOKit
                 return;
             }
 
+            var identities = InputParsingHelpers.ConvertToRecipientList(TextBoxRecipientCheck.Text);
+            if (identities.Length == 0)
+            {
+                await ShowMessageAsync("Enter at least one recipient identity, one per line, or import a CSV/TXT file.", "Missing Input");
+                return;
+            }
+
+            var cancellationToken = _exo.OperationCancellationToken;
             ButtonCheckRecipient.IsEnabled = false;
-            TextBoxRecipientCheckResult.Text = "Checking...";
+            ButtonCopyRecipientResults.Visibility = Visibility.Collapsed;
+            _recipientCheckResults.Clear();
+            var failed = 0;
+            TextBlockRecipientCheckStatus.Text = $"Checking 0 of {identities.Length}...";
             try
             {
-                var result = await _recipientLookupService.CheckRecipientTypeAsync(TextBoxRecipientCheck.Text.Trim());
-                TextBoxRecipientCheckResult.Text = result.DisplayType;
+                foreach (var identity in identities)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var result = await _recipientLookupService.CheckRecipientTypeAsync(identity);
+                    _recipientCheckResults.Add(result);
+                    if (!result.Success) failed++;
+                    TextBlockRecipientCheckStatus.Text = $"Checked {_recipientCheckResults.Count} of {identities.Length} - {failed} failed";
+                }
+                cancellationToken.ThrowIfCancellationRequested();
+                TextBlockRecipientCheckStatus.Text = $"Complete: {_recipientCheckResults.Count - failed} found, {failed} failed";
+            }
+            catch (OperationCanceledException)
+            {
+                TextBlockRecipientCheckStatus.Text = $"Cancelled: {_recipientCheckResults.Count} of {identities.Length} checked, {failed} failed";
+                throw;
             }
             finally
             {
+                ButtonCopyRecipientResults.Visibility = _recipientCheckResults.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
                 ButtonCheckRecipient.IsEnabled = true;
             }
         }

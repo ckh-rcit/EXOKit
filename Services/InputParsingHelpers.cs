@@ -53,6 +53,47 @@ namespace EXOKit.Services
             }
         }
 
+        public static string[] ConvertToRecipientList(string? input)
+        {
+            return (input ?? string.Empty).Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(value => value.Trim()).Where(value => value.Length > 0)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        }
+
+        public static string[] ParseRecipientFile(string content, bool isCsv)
+        {
+            if (!isCsv) return ConvertToRecipientList(content);
+
+            using var reader = new System.IO.StringReader(content);
+            using var parser = new Microsoft.VisualBasic.FileIO.TextFieldParser(reader);
+            parser.SetDelimiters(",", ";");
+            parser.HasFieldsEnclosedInQuotes = true;
+            var firstRow = parser.ReadFields();
+            if (firstRow == null) return Array.Empty<string>();
+
+            var headers = new[] { "Identity", "Recipient", "Email", "EmailAddress", "PrimarySmtpAddress", "UserPrincipalName", "UPN" };
+            var column = Array.FindIndex(firstRow, value => headers.Contains(value.Trim(), StringComparer.OrdinalIgnoreCase));
+            var hasHeader = column >= 0;
+            if (!hasHeader && firstRow.Length != 1)
+                throw new FormatException("A multi-column CSV must have an Identity, Recipient, Email, EmailAddress, PrimarySmtpAddress, UserPrincipalName, or UPN header.");
+            if (!hasHeader) column = 0;
+
+            var values = new List<string>();
+            void AddRow(string[] row)
+            {
+                if (row.Length != firstRow.Length)
+                    throw new FormatException("Each CSV row must have the same number of columns as the first row.");
+                var value = row[column].Trim();
+                if (value.IndexOfAny(new[] { '\r', '\n' }) >= 0)
+                    throw new FormatException("A recipient identity cannot span multiple lines.");
+                if (value.Length > 0) values.Add(value);
+            }
+
+            if (!hasHeader) AddRow(firstRow);
+            while (!parser.EndOfData) AddRow(parser.ReadFields() ?? Array.Empty<string>());
+            return values.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        }
+
         public static string[] GetInvalidEmailLikeValues(IEnumerable<string> values)
         {
             return values.Where(v => !IsEmailLikeValue(v)).ToArray();

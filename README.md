@@ -20,9 +20,12 @@ Ported with feature parity from the original toolkit:
   connection-requirement checks, and the same validation poll pattern.
 - **Bookings** — Adds users to the configured Bookings license group and sets their OWA mailbox
   policy to enable Microsoft Bookings, with already-exists/already-set short-circuits.
-- **Recipient Lookup** — Resolves a recipient identity and reports a friendly recipient type
+- **Recipient Lookup** — Resolves multiple recipient identities and reports a friendly recipient type
   (User/Shared/Room/Equipment Mailbox, Distribution Group, Microsoft 365 Group, or a raw
-  `RecipientType (RecipientTypeDetails)` fallback).
+  `RecipientType (RecipientTypeDetails)` fallback). Paste one identity per line or import a TXT/CSV
+  file. Names containing spaces are preserved and duplicate identities are removed. Results appear
+  per recipient, can be copied, and remain available after cancellation. A failed lookup does not
+  stop the rest of the batch; cancellation stops before the next lookup.
 - **Ticket notes / logging** — Central `Logger` service mirrors the script's
   `Write-OutputLog` / `Write-SummaryLog` behavior, including a "Copy Last Ticket Notes" action
   that extracts the most recent `--- For IT Ticket ---` section from the log.
@@ -54,11 +57,23 @@ The following sections from the original toolkit are **not** ported to EXOKit, p
 The app enforces the same connection order as the original script: Exchange Online must be
 connected before Microsoft Graph can be connected.
 
+### Recipient lookup files
+
+TXT files contain one identity per line. CSV files can contain a single headerless identity column,
+or a header named `Identity`, `Recipient`, `Email`, `EmailAddress`, `PrimarySmtpAddress`,
+`UserPrincipalName`, or `UPN` (case-insensitive). For CSVs with multiple columns, the first recognized
+identity column is used and other columns are ignored. Comma and semicolon delimiters are supported;
+quote names containing either delimiter. Imports append to the existing input without duplicating it.
+
 ## Configuration
 
 The package includes only the sanitized sample configuration. Runtime settings are stored at
 `%LOCALAPPDATA%\EXOKit\config.json`. Saves atomically replace the file and retain the previous
 version as `config.json.bak`. Invalid configuration opens Settings without overwriting the original.
+
+Settings groups fields under Connections, Bookings, ServiceNow Integration, and Updates. The Updates
+section contains the installed version, update feed URL, and update check. Save Settings applies the
+edited configuration; the update check uses the saved feed URL.
 
 Configure these values in Settings:
 

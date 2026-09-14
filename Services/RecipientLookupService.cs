@@ -5,6 +5,7 @@ namespace EXOKit.Services
 {
     public class RecipientCheckResult
     {
+        public string Identity { get; set; } = string.Empty;
         public bool Success { get; set; }
         public string DisplayType { get; set; } = string.Empty;
         public string LogMessage { get; set; } = string.Empty;
@@ -29,6 +30,7 @@ namespace EXOKit.Services
             {
                 return new RecipientCheckResult
                 {
+                    Identity = identity,
                     Success = false,
                     DisplayType = "Enter email.",
                     LogMessage = "Recipient Check: No ID."
@@ -45,6 +47,7 @@ namespace EXOKit.Services
                     Logger.Log($"Recipient Check: '{identity}' not found (null).", LogType.Error);
                     return new RecipientCheckResult
                     {
+                        Identity = identity,
                         Success = false,
                         DisplayType = "Not Found (Unexpected)",
                         LogMessage = $"Recipient Check: '{identity}' not found (null)."
@@ -66,16 +69,22 @@ namespace EXOKit.Services
                 Logger.Log($"Recipient Check: '{identity}' is '{displayType}'.", LogType.Success);
                 return new RecipientCheckResult
                 {
+                    Identity = identity,
                     Success = true,
                     DisplayType = displayType,
                     LogMessage = $"Recipient Check: '{identity}' is '{displayType}'."
                 };
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
                 Logger.Log($"Recipient Check: '{identity}' error. DETAILS: {ex.Message}", LogType.Error);
                 return new RecipientCheckResult
                 {
+                    Identity = identity,
                     Success = false,
                     DisplayType = "Not Found / Error",
                     LogMessage = $"Recipient Check: '{identity}' error. DETAILS: {ex.Message}"

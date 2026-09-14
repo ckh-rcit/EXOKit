@@ -8,6 +8,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Azure.Identity;
 using Azure.Security.KeyVault.Secrets;
+using Microsoft.Identity.Client;
 
 namespace EXOKit.Services
 {
@@ -52,6 +53,31 @@ namespace EXOKit.Services
             return secret.Value.Value;
         }
 
+        internal static string DescribeKeyVaultFailure(Exception exception)
+        {
+            if (exception is not AuthenticationFailedException) return exception.Message;
+
+            var details = new System.Collections.Generic.List<string>();
+            for (Exception? cause = exception; cause != null; cause = cause.InnerException)
+            {
+                details.Add(cause.GetType().Name);
+                if (cause is MsalException msal)
+                {
+                    if (Regex.IsMatch(msal.ErrorCode ?? "", @"\A[A-Za-z0-9_]{1,100}\z"))
+                        details.Add($"Error code: {msal.ErrorCode}");
+                    if (Guid.TryParse(msal.CorrelationId, out var correlationId))
+                        details.Add($"Correlation ID: {correlationId}");
+                    foreach (Match code in Regex.Matches(msal.Message, @"\bAADSTS[0-9]{5,10}\b"))
+                        details.Add(code.Value);
+                }
+            }
+
+            return "Key Vault authentication failed before credentials could be retrieved. " +
+                string.Join("; ", details.Distinct()) +
+                ". Check the EXOKit-M365 sign-in event in Entra for the failure reason. " +
+                "For a client-secret-required error, verify that http://localhost is registered under Mobile and desktop applications, not Web; EXOKit does not use a client secret.";
+        }
+
         /// <summary>
         /// Validates that the configured ServiceNow instance URL and Key Vault secrets are reachable
         /// and correct, without making any destructive changes. Used by the Settings page to give the
@@ -85,7 +111,7 @@ namespace EXOKit.Services
             }
             catch (Exception ex)
             {
-                return new ServiceNowResult { Success = false, Message = $"Failed to retrieve ServiceNow credentials from Key Vault '{_config.KeyVaultUrl}': {ex.Message}" };
+                return new ServiceNowResult { Success = false, Message = $"Failed to retrieve ServiceNow credentials from Key Vault '{_config.KeyVaultUrl}': {DescribeKeyVaultFailure(ex)}" };
             }
 
             if (string.IsNullOrEmpty(snUser) || string.IsNullOrEmpty(snPass))
@@ -160,7 +186,7 @@ namespace EXOKit.Services
             }
             catch (Exception ex)
             {
-                return new ServiceNowResult { Success = false, Message = $"Failed to retrieve ServiceNow credentials from Key Vault: {ex.Message}" };
+                return new ServiceNowResult { Success = false, Message = $"Failed to retrieve ServiceNow credentials from Key Vault: {DescribeKeyVaultFailure(ex)}" };
             }
 
             var encodedCreds = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{snUser}:{snPass}"));

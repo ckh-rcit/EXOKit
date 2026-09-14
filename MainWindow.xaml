@@ -370,12 +370,69 @@
                 </ScrollViewer>
 
                 <!-- Recipient Lookup -->
-                <StackPanel x:Name="PanelRecipientLookup" Spacing="8" Padding="8" Visibility="Collapsed">
-                    <TextBlock Text="Recipient Identity" />
-                    <TextBox x:Name="TextBoxRecipientCheck" Width="320" HorizontalAlignment="Left" />
-                    <Button x:Name="ButtonCheckRecipient" Content="Check Recipient Type" Click="ButtonCheckRecipient_Click" />
-                    <TextBox x:Name="TextBoxRecipientCheckResult" IsReadOnly="True" Width="320" HorizontalAlignment="Left" />
-                </StackPanel>
+                <Grid x:Name="PanelRecipientLookup" Padding="8" RowSpacing="8" Visibility="Collapsed">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <TextBox x:Name="TextBoxRecipientCheck" Header="Recipient Identities" AcceptsReturn="True"
+                             Height="112" TextWrapping="Wrap" ScrollViewer.VerticalScrollBarVisibility="Auto"
+                             ToolTipService.ToolTip="One identity per line: email address, alias, display name, or object ID." />
+                    <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8">
+                        <Button x:Name="ButtonCheckRecipient" Click="ButtonCheckRecipient_Click">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <SymbolIcon Symbol="Find" />
+                                <TextBlock Text="Check Recipients" />
+                            </StackPanel>
+                        </Button>
+                        <Button Click="ButtonBrowseRecipientIdentities_Click" ToolTipService.ToolTip="Import identities from a CSV or TXT file">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <SymbolIcon Symbol="OpenFile" />
+                                <TextBlock Text="Import File" />
+                            </StackPanel>
+                        </Button>
+                        <Button x:Name="ButtonCopyRecipientResults" Click="ButtonCopyRecipientResults_Click" Visibility="Collapsed"
+                                ToolTipService.ToolTip="Copy recipient results" AutomationProperties.Name="Copy recipient results">
+                            <SymbolIcon Symbol="Copy" />
+                        </Button>
+                    </StackPanel>
+                    <TextBlock Grid.Row="2" x:Name="TextBlockRecipientCheckStatus" Opacity="0.7" TextWrapping="Wrap" />
+                    <Grid Grid.Row="3">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <Grid Padding="12,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="2*" />
+                                <ColumnDefinition Width="1.3*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="Identity" FontWeight="SemiBold" />
+                            <TextBlock Grid.Column="1" Text="Recipient Type" FontWeight="SemiBold" />
+                        </Grid>
+                        <ListView Grid.Row="1" x:Name="ListViewRecipientResults" SelectionMode="None">
+                            <ListView.ItemContainerStyle>
+                                <Style TargetType="ListViewItem">
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                </Style>
+                            </ListView.ItemContainerStyle>
+                            <ListView.ItemTemplate>
+                                <DataTemplate x:DataType="services:RecipientCheckResult">
+                                    <Grid Padding="0,4" ColumnSpacing="8" ToolTipService.ToolTip="{x:Bind LogMessage}">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="2*" />
+                                            <ColumnDefinition Width="1.3*" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="{x:Bind Identity}" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+                                        <TextBlock Grid.Column="1" Text="{x:Bind DisplayType}" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ListView.ItemTemplate>
+                        </ListView>
+                    </Grid>
+                </Grid>
 
                 <!-- Reporting -->
                 <Grid x:Name="PanelReporting" Visibility="Collapsed">
@@ -490,48 +547,63 @@
 
                 <!-- Settings -->
                 <ScrollViewer x:Name="PanelSettings" Visibility="Collapsed">
-                    <StackPanel Spacing="8" Padding="8" MaxWidth="560" HorizontalAlignment="Left">
+                    <StackPanel Spacing="20" Padding="8" MaxWidth="560" HorizontalAlignment="Stretch">
                         <TextBlock Text="App Settings" FontWeight="SemiBold" FontSize="16" />
-                        <CheckBox x:Name="CheckBoxExoBrowserSignIn" Content="Browser sign-in for Exchange (WAM compatibility)"
-                                  ToolTipService.ToolTip="Temporary workaround for WAM sign-in issues. Applies to the next EXO connection; Save Settings persists this choice." />
-                        <TextBlock Text="Changes are saved to config.json and take effect immediately (no restart required)." Opacity="0.7" TextWrapping="Wrap" />
+                        <StackPanel Spacing="8">
+                            <TextBlock Text="Connections" FontWeight="SemiBold" />
+                            <CheckBox x:Name="CheckBoxExoBrowserSignIn"
+                                      ToolTipService.ToolTip="Temporary workaround for WAM sign-in issues. Applies to the next EXO connection; Save Settings persists this choice.">
+                                <TextBlock Text="Browser sign-in for Exchange (WAM compatibility)" TextWrapping="Wrap" />
+                            </CheckBox>
+                            <TextBox x:Name="TextBoxSettingsClientId" Header="EXOKit Application (Client) ID" />
+                            <TextBox x:Name="TextBoxSettingsTenantId" Header="Directory (Tenant) ID" />
+                            <TextBox x:Name="TextBoxSettingsGraphScopes" Header="Microsoft Graph API Scopes (one per line)"
+                                     AcceptsReturn="True" Height="100" TextWrapping="Wrap" />
+                        </StackPanel>
 
-                        <TextBlock Text="Bookings License Group Name" Margin="0,8,0,0" />
-                        <TextBox x:Name="TextBoxSettingsBookingsGroup" Width="420" HorizontalAlignment="Left" />
-                        <TextBox x:Name="TextBoxSettingsBookingsGroupId" Header="Bookings Group Object ID (Optional)" Width="420" HorizontalAlignment="Left" />
+                        <StackPanel Spacing="8">
+                            <TextBlock Text="Bookings" FontWeight="SemiBold" />
+                            <TextBox x:Name="TextBoxSettingsBookingsGroup" Header="License Group Name" />
+                            <TextBox x:Name="TextBoxSettingsBookingsGroupId" Header="Group Object ID (Optional)" />
+                            <TextBox x:Name="TextBoxSettingsOwaPolicy" Header="Creators OWA Policy Name" />
+                        </StackPanel>
 
-                        <TextBlock Text="Bookings Creators OWA Policy Name" />
-                        <TextBox x:Name="TextBoxSettingsOwaPolicy" Width="420" HorizontalAlignment="Left" />
+                        <StackPanel Spacing="8">
+                            <TextBlock Text="ServiceNow Integration" FontWeight="SemiBold" />
+                            <CheckBox x:Name="CheckBoxSettingsServiceNowEnabled" Content="Enabled" />
+                            <TextBox x:Name="TextBoxSettingsServiceNowInstanceUrl" Header="Instance URL" />
+                            <TextBox x:Name="TextBoxSettingsServiceNowKeyVaultUrl" Header="Key Vault URL" />
+                            <TextBox x:Name="TextBoxSettingsServiceNowSubscriptionId" Header="Subscription ID" />
+                            <TextBox x:Name="TextBoxSettingsServiceNowUsernameSecret" Header="Username Secret Name" />
+                            <TextBox x:Name="TextBoxSettingsServiceNowPasswordSecret" Header="Password Secret Name" />
+                        </StackPanel>
 
-                        <TextBlock Text="Microsoft Graph API Scopes (one per line)" />
-                        <TextBox x:Name="TextBoxSettingsGraphScopes" AcceptsReturn="True" Height="100" Width="420" TextWrapping="Wrap" HorizontalAlignment="Left" />
-                        <TextBlock Text="EXOKit Application (Client) ID" />
-                        <TextBox x:Name="TextBoxSettingsClientId" Width="420" HorizontalAlignment="Left" />
-                        <TextBlock Text="Directory (Tenant) ID" />
-                        <TextBox x:Name="TextBoxSettingsTenantId" Width="420" HorizontalAlignment="Left" />
-                        <TextBlock Text="Update Feed URL (.appinstaller)" />
-                        <TextBox x:Name="TextBoxSettingsUpdateFeed" Width="420" HorizontalAlignment="Left" />
-                        <Button Content="Check for Updates" Click="ButtonCheckUpdates_Click" HorizontalAlignment="Left" />
-                        <TextBlock x:Name="TextBlockVersion" />
+                        <StackPanel Spacing="8">
+                            <TextBlock Text="Updates" FontWeight="SemiBold" />
+                            <TextBlock x:Name="TextBlockVersion" Opacity="0.7" />
+                            <TextBox x:Name="TextBoxSettingsUpdateFeed" Header="Update Feed URL (.appinstaller)" />
+                            <Button Click="ButtonCheckUpdates_Click" HorizontalAlignment="Left">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <SymbolIcon Symbol="Refresh" />
+                                    <TextBlock Text="Check for Updates" />
+                                </StackPanel>
+                            </Button>
+                        </StackPanel>
 
-                        <TextBlock Text="ServiceNow Integration" FontWeight="SemiBold" Margin="0,8,0,0" />
-                        <CheckBox x:Name="CheckBoxSettingsServiceNowEnabled" Content="Enabled" />
-                        <TextBlock Text="Instance URL" />
-                        <TextBox x:Name="TextBoxSettingsServiceNowInstanceUrl" Width="420" HorizontalAlignment="Left" />
-                        <TextBlock Text="Key Vault URL" />
-                        <TextBox x:Name="TextBoxSettingsServiceNowKeyVaultUrl" Width="420" HorizontalAlignment="Left" />
-                        <TextBlock Text="Subscription Id" />
-                        <TextBox x:Name="TextBoxSettingsServiceNowSubscriptionId" Width="420" HorizontalAlignment="Left" />
-                        <TextBlock Text="Username Secret Name" />
-                        <TextBox x:Name="TextBoxSettingsServiceNowUsernameSecret" Width="420" HorizontalAlignment="Left" />
-                        <TextBlock Text="Password Secret Name" />
-                        <TextBox x:Name="TextBoxSettingsServiceNowPasswordSecret" Width="420" HorizontalAlignment="Left" />
+                        <StackPanel Spacing="8">
+                            <Button x:Name="ButtonSaveSettings" Click="ButtonSaveSettings_Click">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <SymbolIcon Symbol="Save" />
+                                    <TextBlock Text="Save Settings" />
+                                </StackPanel>
+                            </Button>
+                            <TextBlock x:Name="TextBlockSettingsStatus" Opacity="0.7" TextWrapping="Wrap" />
+                        </StackPanel>
 
-                        <Button x:Name="ButtonSaveSettings" Content="Save Settings" Click="ButtonSaveSettings_Click" Margin="0,8,0,0" />
-                        <TextBlock x:Name="TextBlockSettingsStatus" Opacity="0.7" TextWrapping="Wrap" />
-
-                        <TextBlock Text="EXOKit v1.0.25 - Exchange Admin Toolkit" Opacity="0.6" FontSize="12" Margin="0,24,0,0" />
-                        <TextBlock Text="Developed by Chris Harris" Opacity="0.6" FontSize="12" />
+                        <StackPanel Spacing="4">
+                            <TextBlock Text="EXOKit - Exchange Admin Toolkit" Opacity="0.6" FontSize="12" />
+                            <TextBlock Text="Developed by Chris Harris" Opacity="0.6" FontSize="12" />
+                        </StackPanel>
                     </StackPanel>
                 </ScrollViewer>
                 </Grid>
