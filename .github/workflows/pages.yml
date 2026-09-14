@@ -50,12 +50,12 @@ jobs:
           if ($env:FEED_URL -cne "$($env:PAGES_URL)/EXOKit.appinstaller") {
             throw 'APPINSTALLER_FEED_URL must match the configured Pages site.'
           }
-          ./scripts/Publish-UpdateFeed.ps1 -Repository $env:GH_REPO -FeedUrl $env:FEED_URL -OutputDirectory site
+          ./scripts/Publish-UpdateFeed.ps1 -Repository $env:GH_REPO -FeedUrl $env:FEED_URL -OutputDirectory "$env:RUNNER_TEMP/exokit-pages"
 
-      - name: Upload update feed only
+      - name: Upload download page and update feed
         uses: actions/upload-pages-artifact@v4
         with:
-          path: site
+          path: ${{ runner.temp }}/exokit-pages
 
       - name: Deploy update feed
         id: deployment

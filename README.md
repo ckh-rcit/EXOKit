@@ -179,7 +179,7 @@ results do not qualify for closure.
 
 ## Version and Updates
 
-The title bar and Settings show the installed MSIX version, currently `v1.0.31`; unpackaged builds
+The title bar and Settings show the installed MSIX version, currently `v1.0.32`; unpackaged builds
 use the assembly version. Release tags must use `vMajor.Minor.Build`. The workflow stamps that
 version into the manifest and assembly while retaining the existing package name and publisher.
 Use a version higher than the installed version for an update.
@@ -211,8 +211,11 @@ Pages must use GitHub Actions as its publishing source. The Publish Update Feed 
 a successful Build and Release workflow, or manually through Run workflow. It checks out the default
 branch, reads the latest stable release's published MSIX manifest, and generates the feed using that
 package's identity and version. The publisher rejects package-family mismatches and feed downgrades.
-Deployments are serialized. Only the generated `.appinstaller` is uploaded to Pages; installers and
-public certificate trust bundles stay in GitHub Releases. The site root has no landing page.
+Deployments are serialized. The generated `.appinstaller` and download page are uploaded to Pages;
+installers and public certificate trust bundles stay in GitHub Releases. The download page at
+`https://ckh-rcit.github.io/EXOKit/` links to the validated release assets and installation guidance.
+Its version and download links refresh with the feed. No signing material or local configuration
+is included in the site.
 
 The release workflow also generates an `.appinstaller` asset when the variable is configured.
 An existing release can be enrolled by running Publish Update Feed without rebuilding its signed

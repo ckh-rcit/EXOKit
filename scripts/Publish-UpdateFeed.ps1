@@ -23,6 +23,11 @@ $packageName = "EXOKit-$tag-x64.msix"
 $packageUrl = "https://github.com/$Repository/releases/download/$tag/$packageName"
 $assets = @($release.assets | Where-Object { $_.name -ceq $packageName -and $_.browser_download_url -ceq $packageUrl })
 if ($assets.Count -ne 1) { throw 'The latest release does not contain the expected x64 MSIX.' }
+$trustName = "EXOKit-Trust-Bundle-$tag.zip"
+$trustUrl = "https://github.com/$Repository/releases/download/$tag/$trustName"
+if (@($release.assets | Where-Object { $_.name -ceq $trustName -and $_.browser_download_url -ceq $trustUrl }).Count -ne 1) {
+    throw 'The latest release does not contain the expected certificate trust bundle.'
+}
 [xml]$expectedManifest = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\Package.appxmanifest') -Raw
 $expectedIdentity = $expectedManifest.Package.Identity
 
@@ -75,6 +80,18 @@ try {
     New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
     & (Join-Path $PSScriptRoot 'Prepare-Release.ps1') -VersionTag $tag -ManifestPath $manifestPath `
         -FeedUrl $FeedUrl -PackageUrl $packageUrl -OutputPath (Join-Path $OutputDirectory 'EXOKit.appinstaller')
+    $page = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../site/index.html') -Raw
+    $pageValues = @{
+        '{{TAG}}' = $tag
+        '{{REPOSITORY}}' = "https://github.com/$Repository"
+        '{{PACKAGE}}' = $packageUrl
+        '{{TRUST}}' = $trustUrl
+        '{{ICON}}' = [Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $PSScriptRoot '../Assets/Square150x150Logo.scale-200.png')))
+    }
+    foreach ($placeholder in $pageValues.Keys) {
+        $page = $page.Replace($placeholder, [System.Net.WebUtility]::HtmlEncode($pageValues[$placeholder]))
+    }
+    Set-Content -LiteralPath (Join-Path $OutputDirectory 'index.html') -Value $page -Encoding utf8
     Write-Output "Prepared update feed for $tag ($($identity.Publisher))."
 } finally {
     Remove-Item -LiteralPath $workDirectory -Recurse -Force
