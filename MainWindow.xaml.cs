@@ -58,6 +58,8 @@ namespace EXOKit
         private double _lastExpandedOutputHeight = 220;
         private bool _outputCollapsed;
         private bool _showWarnings = true;
+        private int _visibleLogEntries;
+        private int _ticketLogEntries;
         private string? _loadedGroupSettingsIdentity;
         private bool _operationInProgress;
         private System.Threading.CancellationTokenSource? _operationCancellation;
@@ -140,6 +142,8 @@ namespace EXOKit
             _exo.OperationCancellationToken = _operationCancellation.Token;
             _authService.OperationCancellationToken = _operationCancellation.Token;
             ButtonCancelOperation.Visibility = Visibility.Visible;
+            ShellOperationProgress.Visibility = Visibility.Visible;
+            ShellOperationProgress.IsActive = true;
             SetOperationControlsEnabled(false);
             try { await operation(); }
             catch (OperationCanceledException)
@@ -159,6 +163,8 @@ namespace EXOKit
                 _operationCancellation.Dispose();
                 _operationCancellation = null;
                 ButtonCancelOperation.Visibility = Visibility.Collapsed;
+                ShellOperationProgress.IsActive = false;
+                ShellOperationProgress.Visibility = Visibility.Collapsed;
                 SetOperationControlsEnabled(true);
                 UpdateConnectionStatus();
             }
@@ -238,10 +244,16 @@ namespace EXOKit
         /// </summary>
         private void CheckBoxShowWarnings_Changed(object sender, RoutedEventArgs e)
         {
-            if (CheckBoxShowWarnings == null || TextBlockLog == null || LogScrollViewer == null) return;
+            if (CheckBoxShowWarnings == null || TextBlockLog == null || LogScrollViewer == null
+                || TextBlockTicketNotes == null || TextBlockLogCount == null || TextBlockTicketCount == null) return;
             _showWarnings = CheckBoxShowWarnings.IsChecked == true;
 
             TextBlockLog.Inlines.Clear();
+            TextBlockTicketNotes.Inlines.Clear();
+            _visibleLogEntries = 0;
+            _ticketLogEntries = 0;
+            TextBlockLogCount.Text = "0";
+            TextBlockTicketCount.Text = "0";
             foreach (var (historyLine, historyType) in Logger.GetHistory())
             {
                 if (historyType == LogType.Warning && !_showWarnings)
@@ -258,6 +270,7 @@ namespace EXOKit
 
         private void AppendLogLine(string line, LogType type)
         {
+            TextBlockLogCount.Text = (++_visibleLogEntries).ToString();
             var match = DeviceCodeLineRegex.Match(line);
             if (!match.Success)
             {
@@ -301,6 +314,7 @@ namespace EXOKit
 
             if (type == LogType.Ticket)
             {
+                TextBlockTicketCount.Text = (++_ticketLogEntries).ToString();
                 TextBlockTicketNotes.Inlines.Add(new Run
                 {
                     Text = line + Environment.NewLine,
@@ -348,12 +362,12 @@ namespace EXOKit
             if (AppWindowTitleBar.IsCustomizationSupported())
             {
                 var titleBar = AppWindow.TitleBar;
-                titleBar.BackgroundColor = Windows.UI.Color.FromArgb(255, 32, 32, 32);
-                titleBar.InactiveBackgroundColor = Windows.UI.Color.FromArgb(255, 32, 32, 32);
+                titleBar.BackgroundColor = Windows.UI.Color.FromArgb(255, 16, 16, 16);
+                titleBar.InactiveBackgroundColor = Windows.UI.Color.FromArgb(255, 16, 16, 16);
                 titleBar.ForegroundColor = Windows.UI.Color.FromArgb(255, 255, 255, 255);
                 titleBar.InactiveForegroundColor = Windows.UI.Color.FromArgb(255, 200, 200, 200);
-                titleBar.ButtonBackgroundColor = Windows.UI.Color.FromArgb(255, 32, 32, 32);
-                titleBar.ButtonInactiveBackgroundColor = Windows.UI.Color.FromArgb(255, 32, 32, 32);
+                titleBar.ButtonBackgroundColor = Windows.UI.Color.FromArgb(255, 16, 16, 16);
+                titleBar.ButtonInactiveBackgroundColor = Windows.UI.Color.FromArgb(255, 16, 16, 16);
                 titleBar.ButtonForegroundColor = Windows.UI.Color.FromArgb(255, 255, 255, 255);
                 titleBar.ButtonInactiveForegroundColor = Windows.UI.Color.FromArgb(255, 200, 200, 200);
                 titleBar.ButtonHoverBackgroundColor = Windows.UI.Color.FromArgb(255, 60, 60, 60);
@@ -365,23 +379,59 @@ namespace EXOKit
 
         // --- Output collapse/expand ---
 
+        private void ResizeOutput(double height)
+        {
+            if (_outputCollapsed || WorkspaceGrid.ActualHeight <= 0) return;
+            var maximum = Math.Max(140, WorkspaceGrid.ActualHeight - ConnectionBar.ActualHeight - 252);
+            _lastExpandedOutputHeight = Math.Clamp(height, 140, maximum);
+            OutputRow.Height = new GridLength(_lastExpandedOutputHeight);
+        }
+
+        private void WorkspaceGrid_SizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            if (ConnectionControls != null)
+            {
+                var wide = e.NewSize.Width >= 760;
+                Grid.SetRow(ConnectionControls, wide ? 0 : 1);
+                Grid.SetColumn(ConnectionControls, wide ? 1 : 0);
+                Grid.SetColumnSpan(ConnectionControls, wide ? 1 : 2);
+                ConnectionControls.Margin = wide ? new Thickness(16, 0, 0, 0) : new Thickness(0, 12, 0, 0);
+            }
+            if (OutputRow != null && ConnectionBar != null) ResizeOutput(_lastExpandedOutputHeight);
+        }
+
+        private void OutputResizeHandle_DragDelta(object sender, DragDeltaEventArgs e)
+            => ResizeOutput(OutputRow.ActualHeight - e.VerticalChange);
+
+        private void OutputResizeHandle_KeyDown(object sender, KeyRoutedEventArgs e)
+        {
+            if (e.Key != Windows.System.VirtualKey.Up && e.Key != Windows.System.VirtualKey.Down) return;
+            ResizeOutput(OutputRow.ActualHeight + (e.Key == Windows.System.VirtualKey.Up ? 24 : -24));
+            e.Handled = true;
+        }
+
         private void ButtonToggleOutputCollapse_Click(object sender, RoutedEventArgs e)
         {
             if (_outputCollapsed)
             {
-                OutputRow.Height = new GridLength(_lastExpandedOutputHeight);
-                OutputPivot.Visibility = Visibility.Visible;
-                IconToggleOutputCollapse.Glyph = "\uE70D";
                 _outputCollapsed = false;
+                ResizeOutput(_lastExpandedOutputHeight);
+                OutputPivot.Visibility = Visibility.Visible;
+                OutputResizeHandle.Visibility = Visibility.Visible;
+                IconToggleOutputCollapse.Glyph = "\uE70D";
             }
             else
             {
                 _lastExpandedOutputHeight = OutputRow.ActualHeight > 0 ? OutputRow.ActualHeight : _lastExpandedOutputHeight;
                 OutputPivot.Visibility = Visibility.Collapsed;
+                OutputResizeHandle.Visibility = Visibility.Collapsed;
                 OutputRow.Height = GridLength.Auto;
                 IconToggleOutputCollapse.Glyph = "\uE70E";
                 _outputCollapsed = true;
             }
+            var action = _outputCollapsed ? "Expand output" : "Collapse output";
+            ToolTipService.SetToolTip(ButtonToggleOutputCollapse, action);
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(ButtonToggleOutputCollapse, action);
         }
 
         // --- ServiceNow auto-close ---
@@ -425,34 +475,11 @@ namespace EXOKit
 
         // --- Navigation ---
 
-        private void SetNavIcons(bool show)
-        {
-            NavItemMailboxes.Icon = show ? new FontIcon { Glyph = "M", FontFamily = new FontFamily("Segoe UI Semibold") } : null;
-            NavItemCreateMailbox.Icon = show ? new FontIcon { Glyph = "C", FontFamily = new FontFamily("Segoe UI Semibold") } : null;
-            NavItemResources.Icon = show ? new FontIcon { Glyph = "R", FontFamily = new FontFamily("Segoe UI Semibold") } : null;
-            NavItemGroups.Icon = show ? new FontIcon { Glyph = "G", FontFamily = new FontFamily("Segoe UI Semibold") } : null;
-            NavItemCreateGroup.Icon = show ? new FontIcon { Glyph = "CG", FontFamily = new FontFamily("Segoe UI Semibold") } : null;
-            NavItemGroupSettings.Icon = show ? new FontIcon { Glyph = "GS", FontFamily = new FontFamily("Segoe UI Semibold") } : null;
-            NavItemBookings.Icon = show ? new FontIcon { Glyph = "B", FontFamily = new FontFamily("Segoe UI Semibold") } : null;
-            NavItemRecipientLookup.Icon = show ? new FontIcon { Glyph = "RL", FontFamily = new FontFamily("Segoe UI Semibold") } : null;
-            NavItemReporting.Icon = show ? new FontIcon { Glyph = "Rp", FontFamily = new FontFamily("Segoe UI Semibold") } : null;
-            NavItemSnapshots.Icon = show ? new FontIcon { Glyph = "Sh", FontFamily = new FontFamily("Segoe UI Semibold") } : null;
-            NavItemSettings.Icon = show ? new FontIcon { Glyph = "S", FontFamily = new FontFamily("Segoe UI Semibold") } : null;
-        }
-
-        private void MainNavigationView_PaneOpening(NavigationView sender, object args)
-        {
-            SetNavIcons(false);
-        }
-
-        private void MainNavigationView_PaneClosing(NavigationView sender, NavigationViewPaneClosingEventArgs args)
-        {
-            SetNavIcons(true);
-        }
-
         private void MainNavigationView_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
         {
             var tag = (args.SelectedItem as NavigationViewItem)?.Tag as string;
+            if (TextBlockPageTitle != null)
+                TextBlockPageTitle.Text = (args.SelectedItem as NavigationViewItem)?.Content?.ToString() ?? "Mailboxes";
 
             PanelMailboxes.Visibility = Visibility.Collapsed;
             PanelCreateMailbox.Visibility = Visibility.Collapsed;
@@ -585,9 +612,19 @@ namespace EXOKit
         {
             var exoStatus = _exo.IsConnected ? $"EXO: {_exo.ConnectedUserPrincipalName}" : "EXO: Not connected";
             var graphStatus = _authService.IsGraphConnected ? $"Graph: {_authService.ConnectedUser}" : "Graph: Not connected";
-            TextBlockConnectionStatus.Text = $"{exoStatus} | {graphStatus}";
+            TextBlockExoStatus.Text = _exo.IsConnected ? "EXO connected" : "EXO offline";
+            TextBlockGraphStatus.Text = _authService.IsGraphConnected ? "Graph connected" : "Graph offline";
+            ExoOnlineIndicator.Visibility = _exo.IsConnected ? Visibility.Visible : Visibility.Collapsed;
+            ExoOfflineIndicator.Visibility = _exo.IsConnected ? Visibility.Collapsed : Visibility.Visible;
+            GraphOnlineIndicator.Visibility = _authService.IsGraphConnected ? Visibility.Visible : Visibility.Collapsed;
+            GraphOfflineIndicator.Visibility = _authService.IsGraphConnected ? Visibility.Collapsed : Visibility.Visible;
+            ToolTipService.SetToolTip(ExoConnectionStatus, exoStatus);
+            ToolTipService.SetToolTip(GraphConnectionStatus, graphStatus);
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(ExoConnectionStatus, exoStatus);
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(GraphConnectionStatus, graphStatus);
             ButtonConnectGraph.IsEnabled = _exo.IsConnected && !_authService.IsGraphConnected;
             ButtonConnectExo.IsEnabled = !_exo.IsConnected;
+            ButtonDisconnect.IsEnabled = _exo.IsConnected || _authService.IsGraphConnected;
         }
 
         // --- Connection handlers ---

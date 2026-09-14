@@ -14,7 +14,40 @@
         <MicaBackdrop />
     </Window.SystemBackdrop>
 
-    <Grid x:Name="RootLayout" Padding="0" RequestedTheme="Dark">
+    <Grid x:Name="RootLayout" Padding="0" RequestedTheme="Dark" Background="{ThemeResource ShellCanvasBrush}">
+        <Grid.Resources>
+            <ResourceDictionary>
+                <ResourceDictionary.ThemeDictionaries>
+                    <ResourceDictionary x:Key="Dark">
+                        <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="#101010" />
+                        <SolidColorBrush x:Key="NavigationViewContentBackground" Color="#0A0A0A" />
+                        <SolidColorBrush x:Key="NavigationViewSelectionIndicatorForeground" Color="#EDEDED" />
+                        <SolidColorBrush x:Key="AccentFillColorDefaultBrush" Color="#EDEDED" />
+                        <SolidColorBrush x:Key="AccentFillColorSecondaryBrush" Color="#D4D4D4" />
+                        <SolidColorBrush x:Key="AccentFillColorTertiaryBrush" Color="#B0B0B0" />
+                        <SolidColorBrush x:Key="TextOnAccentFillColorPrimaryBrush" Color="#0A0A0A" />
+                        <SolidColorBrush x:Key="TextOnAccentFillColorSecondaryBrush" Color="#333333" />
+                        <SolidColorBrush x:Key="SystemControlHighlightAccentBrush" Color="#EDEDED" />
+                        <StaticResource x:Key="AccentButtonBackground" ResourceKey="AccentFillColorDefaultBrush" />
+                        <StaticResource x:Key="AccentButtonBackgroundPointerOver" ResourceKey="AccentFillColorSecondaryBrush" />
+                        <StaticResource x:Key="AccentButtonBackgroundPressed" ResourceKey="AccentFillColorTertiaryBrush" />
+                        <StaticResource x:Key="AccentButtonForeground" ResourceKey="TextOnAccentFillColorPrimaryBrush" />
+                        <StaticResource x:Key="AccentButtonForegroundPointerOver" ResourceKey="TextOnAccentFillColorPrimaryBrush" />
+                        <StaticResource x:Key="AccentButtonForegroundPressed" ResourceKey="TextOnAccentFillColorSecondaryBrush" />
+                        <StaticResource x:Key="CheckBoxCheckBackgroundFillChecked" ResourceKey="AccentFillColorDefaultBrush" />
+                        <StaticResource x:Key="CheckBoxCheckBackgroundFillCheckedPointerOver" ResourceKey="AccentFillColorSecondaryBrush" />
+                        <StaticResource x:Key="CheckBoxCheckBackgroundFillCheckedPressed" ResourceKey="AccentFillColorTertiaryBrush" />
+                        <StaticResource x:Key="CheckBoxCheckBackgroundStrokeChecked" ResourceKey="AccentFillColorDefaultBrush" />
+                        <StaticResource x:Key="CheckBoxCheckBackgroundStrokeCheckedPointerOver" ResourceKey="AccentFillColorSecondaryBrush" />
+                        <StaticResource x:Key="CheckBoxCheckBackgroundStrokeCheckedPressed" ResourceKey="AccentFillColorTertiaryBrush" />
+                        <StaticResource x:Key="CheckBoxCheckGlyphForegroundChecked" ResourceKey="TextOnAccentFillColorPrimaryBrush" />
+                        <StaticResource x:Key="CheckBoxCheckGlyphForegroundCheckedPointerOver" ResourceKey="TextOnAccentFillColorPrimaryBrush" />
+                        <StaticResource x:Key="CheckBoxCheckGlyphForegroundCheckedPressed" ResourceKey="TextOnAccentFillColorSecondaryBrush" />
+                        <StaticResource x:Key="PivotHeaderItemSelectedPipeFill" ResourceKey="AccentFillColorDefaultBrush" />
+                    </ResourceDictionary>
+                </ResourceDictionary.ThemeDictionaries>
+            </ResourceDictionary>
+        </Grid.Resources>
         <Grid.RowDefinitions>
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
@@ -24,41 +57,82 @@
 
         <!-- Sidebar navigation (full height) + section content -->
         <NavigationView Grid.Row="0" x:Name="MainNavigationView"
-                        PaneDisplayMode="Left" IsBackButtonVisible="Collapsed" IsSettingsVisible="False"
-                        IsTitleBarAutoPaddingEnabled="False" SelectionChanged="MainNavigationView_SelectionChanged"
-                        PaneOpening="MainNavigationView_PaneOpening" PaneClosing="MainNavigationView_PaneClosing">
+                        PaneDisplayMode="Auto" OpenPaneLength="232" CompactModeThresholdWidth="0" ExpandedModeThresholdWidth="1120"
+                        IsBackButtonVisible="Collapsed" IsSettingsVisible="False" PaneTitle="EXOKit"
+                        IsTitleBarAutoPaddingEnabled="False" SelectionChanged="MainNavigationView_SelectionChanged">
             <NavigationView.MenuItems>
-                <NavigationViewItem x:Name="NavItemMailboxes" Content="Mailboxes" Tag="Mailboxes" IsSelected="True" />
-                <NavigationViewItem x:Name="NavItemCreateMailbox" Content="Create Mailbox" Tag="CreateMailbox" />
-                <NavigationViewItem x:Name="NavItemResources" Content="Resources" Tag="Resources" />
-                <NavigationViewItem x:Name="NavItemGroups" Content="Groups" Tag="Groups" />
-                <NavigationViewItem x:Name="NavItemCreateGroup" Content="Create Group" Tag="CreateGroup" />
-                <NavigationViewItem x:Name="NavItemGroupSettings" Content="Group Settings" Tag="GroupSettings" />
-                <NavigationViewItem x:Name="NavItemBookings" Content="Bookings" Tag="Bookings" />
-                <NavigationViewItem x:Name="NavItemRecipientLookup" Content="Recipient Lookup" Tag="RecipientLookup" />
-                <NavigationViewItem x:Name="NavItemReporting" Content="Reporting" Tag="Reporting" />
-                <NavigationViewItem x:Name="NavItemSnapshots" Content="Snapshots" Tag="Snapshots" />
-                <NavigationViewItem x:Name="NavItemSettings" Content="Settings" Tag="Settings" />
+                    <NavigationViewItem x:Name="NavItemMailboxes" Content="Mailboxes" Tag="Mailboxes" Icon="Mail" IsSelected="True" />
+                    <NavigationViewItem x:Name="NavItemCreateMailbox" Content="Create Mailbox" Tag="CreateMailbox" Icon="Add" />
+                    <NavigationViewItem x:Name="NavItemResources" Content="Resources" Tag="Resources" Icon="Library" />
+                    <NavigationViewItem x:Name="NavItemGroups" Content="Groups" Tag="Groups" Icon="People" />
+                    <NavigationViewItem x:Name="NavItemCreateGroup" Content="Create Group" Tag="CreateGroup" Icon="AddFriend" />
+                    <NavigationViewItem x:Name="NavItemGroupSettings" Content="Group Settings" Tag="GroupSettings" Icon="Manage" />
+                    <NavigationViewItem x:Name="NavItemBookings" Content="Bookings" Tag="Bookings" Icon="Calendar" />
+                    <NavigationViewItemSeparator />
+                    <NavigationViewItem x:Name="NavItemRecipientLookup" Content="Recipient Lookup" Tag="RecipientLookup" Icon="Find" />
+                    <NavigationViewItem x:Name="NavItemReporting" Content="Reporting" Tag="Reporting" Icon="Page" />
+                    <NavigationViewItem x:Name="NavItemSnapshots" Content="Snapshots" Tag="Snapshots" Icon="Clock" />
+                    <NavigationViewItem x:Name="NavItemSettings" Content="Settings" Tag="Settings" Icon="Setting" />
             </NavigationView.MenuItems>
 
-            <Grid Padding="16,12,16,12">
+            <Grid x:Name="WorkspaceGrid" Padding="24,20,24,12" SizeChanged="WorkspaceGrid_SizeChanged">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
-                    <RowDefinition x:Name="OutputRow" Height="240" />
+                    <RowDefinition x:Name="OutputRow" Height="220" />
                 </Grid.RowDefinitions>
 
                 <!-- Connection status bar -->
-                <Border Grid.Row="0" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1"
-                        CornerRadius="6" Padding="16,12" Margin="0,0,0,12">
-                    <StackPanel x:Name="ConnectionControls" Orientation="Horizontal" Spacing="12">
-                        <Button x:Name="ButtonConnectExo" Content="Connect Exchange Online" Click="ButtonConnectExo_Click" />
-                        <Button x:Name="ButtonConnectGraph" Content="Connect Microsoft Graph" Click="ButtonConnectGraph_Click" IsEnabled="False" />
-                        <Button x:Name="ButtonDisconnect" Content="Disconnect All" Click="ButtonDisconnect_Click" />
-                        <Border Width="1" Background="{ThemeResource CardStrokeColorDefaultBrush}" Margin="4,2" />
-                        <TextBlock x:Name="TextBlockConnectionStatus" Text="Not connected." VerticalAlignment="Center" Opacity="0.85" />
-                    </StackPanel>
+                <Border x:Name="ConnectionBar" Grid.Row="0" BorderBrush="{ThemeResource ShellBorderBrush}"
+                        BorderThickness="0,0,0,1" Padding="0,0,0,16" Margin="0,0,0,20">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Grid ColumnSpacing="12" VerticalAlignment="Center">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="TextBlockPageTitle" Text="Mailboxes" FontSize="22" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                            <ProgressRing Grid.Column="1" x:Name="ShellOperationProgress" Width="20" Height="20" IsActive="False"
+                                          Visibility="Collapsed" AutomationProperties.Name="Operation in progress" />
+                        </Grid>
+                        <StackPanel x:Name="ConnectionControls" Grid.Row="1" Grid.ColumnSpan="2" Margin="0,12,0,0"
+                                    Orientation="Horizontal" Spacing="16" VerticalAlignment="Center">
+                            <StackPanel x:Name="ExoConnectionStatus" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                <Grid Width="8" Height="8">
+                                    <Ellipse x:Name="ExoOfflineIndicator" Stroke="{ThemeResource ShellMutedBrush}" StrokeThickness="1" />
+                                    <Ellipse x:Name="ExoOnlineIndicator" Fill="{ThemeResource ShellConnectedBrush}" Visibility="Collapsed" />
+                                </Grid>
+                                <TextBlock x:Name="TextBlockExoStatus" Text="EXO offline" FontSize="12" Foreground="{ThemeResource ShellMutedBrush}" />
+                            </StackPanel>
+                            <StackPanel x:Name="GraphConnectionStatus" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                <Grid Width="8" Height="8">
+                                    <Ellipse x:Name="GraphOfflineIndicator" Stroke="{ThemeResource ShellMutedBrush}" StrokeThickness="1" />
+                                    <Ellipse x:Name="GraphOnlineIndicator" Fill="{ThemeResource ShellConnectedBrush}" Visibility="Collapsed" />
+                                </Grid>
+                                <TextBlock x:Name="TextBlockGraphStatus" Text="Graph offline" FontSize="12" Foreground="{ThemeResource ShellMutedBrush}" />
+                            </StackPanel>
+                            <Button x:Name="ButtonConnections" Width="32" Height="32" Padding="6" Background="Transparent"
+                                    ToolTipService.ToolTip="Manage connections" AutomationProperties.Name="Manage connections">
+                                <SymbolIcon Symbol="World" />
+                                <Button.Flyout>
+                                    <MenuFlyout>
+                                        <MenuFlyoutItem x:Name="ButtonConnectExo" Text="Connect Exchange Online" Icon="Mail" Click="ButtonConnectExo_Click" />
+                                        <MenuFlyoutItem x:Name="ButtonConnectGraph" Text="Connect Microsoft Graph" Icon="People" Click="ButtonConnectGraph_Click" IsEnabled="False" />
+                                        <MenuFlyoutSeparator />
+                                        <MenuFlyoutItem x:Name="ButtonDisconnect" Text="Disconnect All" Icon="Cancel" Click="ButtonDisconnect_Click" IsEnabled="False" />
+                                    </MenuFlyout>
+                                </Button.Flyout>
+                            </Button>
+                        </StackPanel>
+                    </Grid>
                 </Border>
 
                 <Grid x:Name="OperationPanels" Grid.Row="1">
@@ -75,7 +149,7 @@
                         </Grid.RowDefinitions>
 
                         <StackPanel Grid.Row="0" Grid.Column="0" Spacing="8">
-                            <TextBlock Text="Mailbox(es) (one per line, or comma/semicolon separated)" Opacity="0.85" />
+                            <TextBlock Text="Mailbox(es) (one per line, or comma/semicolon separated)" Opacity="0.85" TextWrapping="Wrap" />
                             <Grid ColumnSpacing="8">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
@@ -612,29 +686,53 @@
                 <Grid Grid.Row="2" Margin="0,12,0,0">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
-                    <Grid Grid.Row="0" Margin="0,0,0,4">
+                    <Thumb x:Name="OutputResizeHandle" Height="12" DragDelta="OutputResizeHandle_DragDelta"
+                           KeyDown="OutputResizeHandle_KeyDown" IsTabStop="True" UseSystemFocusVisuals="True"
+                           AutomationProperties.Name="Resize output panel"
+                           ToolTipService.ToolTip="Resize output panel. Drag, or focus and use the Up and Down arrow keys.">
+                        <Thumb.Template>
+                            <ControlTemplate TargetType="Thumb">
+                                <Grid Background="Transparent">
+                                    <Border Height="1" Background="{ThemeResource ShellBorderBrush}" VerticalAlignment="Center" />
+                                    <Border Width="32" Height="3" Background="{ThemeResource ShellMutedBrush}" CornerRadius="1" />
+                                </Grid>
+                            </ControlTemplate>
+                        </Thumb.Template>
+                    </Thumb>
+                    <Grid Grid.Row="1" Margin="0,4,0,0" ColumnSpacing="12">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8">
-                            <TextBlock Text="ServiceNow Task/Inc #:" VerticalAlignment="Center" Opacity="0.85" />
-                            <TextBox x:Name="TextBoxServiceNowTicketNumber" Width="160"
+                            <TextBlock Text="Ticket" VerticalAlignment="Center" Foreground="{ThemeResource ShellMutedBrush}" FontSize="12" />
+                            <TextBox x:Name="TextBoxServiceNowTicketNumber" Width="140" FontSize="12"
+                                     AutomationProperties.Name="ServiceNow ticket number"
                                      ToolTipService.ToolTip="Optional ticket number. Verified mailbox/group role operations offer closure after you review the notes." />
-                            <CheckBox x:Name="CheckBoxShowWarnings" Content="Show Warnings" VerticalAlignment="Center" Checked="CheckBoxShowWarnings_Changed" Unchecked="CheckBoxShowWarnings_Changed"
-                                      IsChecked="True" ToolTipService.ToolTip="Show warnings, including unconfirmed changes." />
                         </StackPanel>
-                        <Button Grid.Column="1" x:Name="ButtonToggleOutputCollapse" Click="ButtonToggleOutputCollapse_Click"
-                                Padding="4" MinWidth="0" Background="Transparent" BorderThickness="0"
-                                ToolTipService.ToolTip="Collapse/Expand Output">
+                        <CheckBox Grid.Column="1" x:Name="CheckBoxShowWarnings" Content="Warnings" FontSize="12" VerticalAlignment="Center"
+                                  Checked="CheckBoxShowWarnings_Changed" Unchecked="CheckBoxShowWarnings_Changed"
+                                  IsChecked="True" ToolTipService.ToolTip="Show warnings, including unconfirmed changes." />
+                        <Button Grid.Column="2" x:Name="ButtonToggleOutputCollapse" Click="ButtonToggleOutputCollapse_Click"
+                                Width="32" Height="32" Padding="6" Background="Transparent" BorderThickness="0"
+                                ToolTipService.ToolTip="Collapse output" AutomationProperties.Name="Collapse output">
                             <FontIcon x:Name="IconToggleOutputCollapse" Glyph="&#xE70D;" FontSize="14" />
                         </Button>
                     </Grid>
-                    <Pivot Grid.Row="1" x:Name="OutputPivot">
-                        <PivotItem Header="Log">
-                            <Border BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="4">
+                    <Pivot Grid.Row="2" x:Name="OutputPivot">
+                        <PivotItem>
+                            <PivotItem.Header>
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <TextBlock Text="Log" FontSize="13" VerticalAlignment="Center" />
+                                    <TextBlock x:Name="TextBlockLogCount" Text="0" FontSize="12" FontFamily="Consolas"
+                                               Foreground="{ThemeResource ShellMutedBrush}" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </PivotItem.Header>
+                            <Border Background="{ThemeResource ShellSurfaceBrush}" BorderThickness="0" CornerRadius="4">
                                 <ScrollViewer x:Name="LogScrollViewer" VerticalScrollBarVisibility="Auto" VerticalAlignment="Stretch">
                                     <TextBlock x:Name="TextBlockLog" TextWrapping="Wrap" Padding="8,8,8,20" FontFamily="Consolas" FontSize="12" IsTextSelectionEnabled="True" />
                                 </ScrollViewer>
@@ -642,16 +740,18 @@
                         </PivotItem>
                         <PivotItem>
                             <PivotItem.Header>
-                                <StackPanel Orientation="Horizontal" Spacing="4">
-                                    <TextBlock Text="Ticket Notes" VerticalAlignment="Center" />
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <TextBlock Text="Ticket Notes" FontSize="13" VerticalAlignment="Center" />
+                                    <TextBlock x:Name="TextBlockTicketCount" Text="0" FontSize="12" FontFamily="Consolas"
+                                               Foreground="{ThemeResource ShellMutedBrush}" VerticalAlignment="Center" />
                                     <Button x:Name="ButtonCopyTicketNotes" Click="ButtonCopyTicketNotes_Click"
-                                            Padding="4" MinWidth="0" Background="Transparent" BorderThickness="0"
-                                            ToolTipService.ToolTip="Copy Last Ticket Notes">
+                                            Width="28" Height="28" Padding="4" Background="Transparent" BorderThickness="0"
+                                            ToolTipService.ToolTip="Copy last ticket notes" AutomationProperties.Name="Copy last ticket notes">
                                         <FontIcon Glyph="&#xE8C8;" FontSize="14" />
                                     </Button>
                                 </StackPanel>
                             </PivotItem.Header>
-                            <Border BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="4">
+                            <Border Background="{ThemeResource ShellSurfaceBrush}" BorderThickness="0" CornerRadius="4">
                                 <ScrollViewer x:Name="TicketNotesScrollViewer" VerticalScrollBarVisibility="Auto" VerticalAlignment="Stretch">
                                     <TextBlock x:Name="TextBlockTicketNotes" TextWrapping="Wrap" Padding="8,8,8,20" FontFamily="Consolas" FontSize="12" IsTextSelectionEnabled="True" />
                                 </ScrollViewer>

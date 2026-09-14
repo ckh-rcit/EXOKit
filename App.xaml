@@ -6,6 +6,22 @@
     xmlns:local="using:EXOKit">
     <Application.Resources>
         <ResourceDictionary>
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Dark">
+                    <SolidColorBrush x:Key="ShellCanvasBrush" Color="#0A0A0A" />
+                    <SolidColorBrush x:Key="ShellSurfaceBrush" Color="#141414" />
+                    <SolidColorBrush x:Key="ShellBorderBrush" Color="#2B2B2B" />
+                    <SolidColorBrush x:Key="ShellMutedBrush" Color="#A1A1A1" />
+                    <SolidColorBrush x:Key="ShellConnectedBrush" Color="#6EE7A0" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="HighContrast">
+                    <SolidColorBrush x:Key="ShellCanvasBrush" Color="{ThemeResource SystemColorWindowColor}" />
+                    <SolidColorBrush x:Key="ShellSurfaceBrush" Color="{ThemeResource SystemColorWindowColor}" />
+                    <SolidColorBrush x:Key="ShellBorderBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+                    <SolidColorBrush x:Key="ShellMutedBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+                    <SolidColorBrush x:Key="ShellConnectedBrush" Color="{ThemeResource SystemColorHighlightColor}" />
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
                 <!-- Other merged dictionaries here -->
