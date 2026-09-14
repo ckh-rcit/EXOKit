@@ -1,4 +1,5 @@
 using System;
+using System.Collections.ObjectModel;
 using System.Globalization;
 using System.Management.Automation;
 using System.Management.Automation.Host;
@@ -7,16 +8,19 @@ using System.Text;
 namespace EXOKit.Services
 {
     /// <summary>
-    /// Minimal PSHost implementation that forwards all host output (Write-Host, progress, prompts)
-    /// into the application's Logger instead of a real console. Connect-ExchangeOnline's device-code
-    /// sign-in flow writes the code/URL via Write-Host, which throws "PSHostUserInterface is null"
-    /// style errors if no host UI is attached - this lets that output land in the app's log panel.
+    /// Minimal PSHost implementation that forwards output to Logger and choice prompts to the UI.
+    /// Security decisions require an explicit response; unavailable UI never implies consent.
     /// Ported from Entra Scout's LoggerPSHost.
     /// </summary>
     public class LoggerPSHost : PSHost
     {
-        private readonly LoggerPSHostUserInterface _ui = new();
+        private readonly LoggerPSHostUserInterface _ui;
         private readonly Guid _instanceId = Guid.NewGuid();
+
+        public LoggerPSHost(Func<string, string, Collection<ChoiceDescription>, int, int>? promptForChoice = null)
+        {
+            _ui = new LoggerPSHostUserInterface(promptForChoice);
+        }
 
         public override CultureInfo CurrentCulture => CultureInfo.CurrentCulture;
         public override CultureInfo CurrentUICulture => CultureInfo.CurrentUICulture;
@@ -36,6 +40,12 @@ namespace EXOKit.Services
     {
         private readonly LoggerPSHostRawUserInterface _rawUi = new();
         private readonly StringBuilder _lineBuffer = new();
+        private readonly Func<string, string, Collection<ChoiceDescription>, int, int>? _promptForChoice;
+
+        public LoggerPSHostUserInterface(Func<string, string, Collection<ChoiceDescription>, int, int>? promptForChoice = null)
+        {
+            _promptForChoice = promptForChoice;
+        }
 
         public override PSHostRawUserInterface RawUI => _rawUi;
 
@@ -86,7 +96,12 @@ namespace EXOKit.Services
         public override int PromptForChoice(string caption, string message, System.Collections.ObjectModel.Collection<ChoiceDescription> choices, int defaultChoice)
         {
             Logger.Log($"{caption}: {message}");
-            return defaultChoice;
+            if (_promptForChoice == null)
+                throw new InvalidOperationException("PowerShell requires an explicit choice, but no prompt UI is available. No choice was made.");
+            var selectedChoice = _promptForChoice(caption, message, choices, defaultChoice);
+            if (selectedChoice < 0 || selectedChoice >= choices.Count)
+                throw new InvalidOperationException("The PowerShell prompt did not return a valid choice. No choice was made.");
+            return selectedChoice;
         }
 
         public override PSCredential PromptForCredential(string caption, string message, string userName, string targetName) =>

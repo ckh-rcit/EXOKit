@@ -66,6 +66,7 @@ namespace EXOKit
         {
             InitializeComponent();
 
+            _exo.PromptForChoice = PromptForPowerShellChoice;
             AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "toolbox.ico"));
             ApplyDarkTitleBar();
 
@@ -1946,6 +1947,62 @@ namespace EXOKit
                 XamlRoot = Content.XamlRoot
             };
             await dialog.ShowAsync();
+        }
+
+        private int PromptForPowerShellChoice(string caption, string message,
+            Collection<System.Management.Automation.Host.ChoiceDescription> choices, int defaultChoice)
+        {
+            if (DispatcherQueue.HasThreadAccess)
+                throw new InvalidOperationException("PowerShell prompts must run on the background runspace thread.");
+            var cancellationToken = _exo.OperationCancellationToken;
+            cancellationToken.ThrowIfCancellationRequested();
+            var completion = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+            if (!DispatcherQueue.TryEnqueue(async () =>
+            {
+                try
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var selector = new ComboBox { HorizontalAlignment = HorizontalAlignment.Stretch, SelectedIndex = -1 };
+                    var help = new TextBlock { TextWrapping = TextWrapping.Wrap };
+                    foreach (var choice in choices)
+                        selector.Items.Add(choice.Label.Replace("&", string.Empty));
+                    var panel = new StackPanel { Spacing = 12 };
+                    panel.Children.Add(new TextBlock { Text = caption, TextWrapping = TextWrapping.Wrap });
+                    panel.Children.Add(new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap });
+                    panel.Children.Add(selector);
+                    panel.Children.Add(help);
+                    var dialog = new ContentDialog
+                    {
+                        Title = "PowerShell Confirmation",
+                        Content = new ScrollViewer
+                        {
+                            Content = panel,
+                            MaxHeight = Math.Max(120, Content.XamlRoot.Size.Height - 240),
+                            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                            VerticalScrollBarVisibility = ScrollBarVisibility.Auto
+                        },
+                        PrimaryButtonText = "Continue",
+                        CloseButtonText = "Cancel",
+                        IsPrimaryButtonEnabled = false,
+                        DefaultButton = ContentDialogButton.Close,
+                        XamlRoot = Content.XamlRoot
+                    };
+                    selector.SelectionChanged += (_, _) =>
+                    {
+                        dialog.IsPrimaryButtonEnabled = selector.SelectedIndex >= 0;
+                        help.Text = selector.SelectedIndex >= 0 ? choices[selector.SelectedIndex].HelpMessage : string.Empty;
+                    };
+                    using var registration = cancellationToken.Register(() => DispatcherQueue.TryEnqueue(() => dialog.Hide()));
+                    var result = await dialog.ShowAsync();
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (result != ContentDialogResult.Primary) completion.TrySetCanceled();
+                    else completion.TrySetResult(selector.SelectedIndex);
+                }
+                catch (OperationCanceledException) { completion.TrySetCanceled(); }
+                catch (Exception exception) { completion.TrySetException(exception); }
+            }))
+                throw new InvalidOperationException("Unable to display the PowerShell confirmation. No choice was made.");
+            return completion.Task.GetAwaiter().GetResult();
         }
 
         private async Task<bool> ShowConfirmAsync(string message, string title)

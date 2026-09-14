@@ -103,6 +103,12 @@ workaround. The choice applies to the next connection and is persisted by Save S
 not bypass MFA or tenant policy and does not fix shared-process assembly conflicts. Verify EXO
 access again after connecting Graph when testing authentication changes.
 
+PowerShell publisher-trust prompts appear in a confirmation dialog with no choice preselected.
+Review the publisher and file before selecting a response. `Run once` approves that execution;
+`Always run` persistently trusts the publisher through PowerShell. Cancel stops the prompt without
+choosing for you. EXOKit does not bypass execution policy or automatically install publisher
+certificates. These prompts can occur during module loading, before Microsoft sign-in starts.
+
 For ServiceNow, the same registration is used for interactive Key Vault authentication. Configure
 Azure Key Vault delegated `user_impersonation` access and give the administrator secret-read access
 to the required vault secrets, such as the Key Vault Secrets User role at the appropriate scope.
@@ -151,7 +157,7 @@ results do not qualify for closure.
 
 ## Version and Updates
 
-The title bar and Settings show the installed MSIX version, currently `v1.0.26`; unpackaged builds
+The title bar and Settings show the installed MSIX version, currently `v1.0.27`; unpackaged builds
 use the assembly version. Release tags must use `vMajor.Minor.Build`. The workflow stamps that
 version into the manifest and assembly while retaining the existing package name and publisher.
 Use a version higher than the installed version for an update.

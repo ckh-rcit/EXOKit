@@ -9,9 +9,60 @@ namespace EXOKit.Tests
         private const string Tenant = "11111111-1111-1111-1111-111111111111";
         private static Task NoDelay() => Task.CompletedTask;
         private static Exception ServerBug() => new InvalidOperationException("Write-ErrorMessage: Object reference not set to an instance of an object");
+        private static System.Collections.ObjectModel.Collection<System.Management.Automation.Host.ChoiceDescription> PublisherChoices() => new()
+        {
+            new("&Never run"), new("&Do not run"), new("&Run once"), new("&Always run")
+        };
 
         public SafetyTests() => Directory.CreateDirectory(_directory);
         public void Dispose() => Directory.Delete(_directory, true);
+
+        [Fact]
+        public void PublisherPromptWithoutUiDoesNotSilentlyChooseDefault()
+        {
+            var choices = PublisherChoices();
+            var host = new LoggerPSHost();
+            Assert.Throws<InvalidOperationException>(() => host.UI.PromptForChoice(
+                "Do you want to run software from this untrusted publisher?", "PackageManagement.format.ps1xml", choices, 1));
+        }
+
+        [Theory]
+        [InlineData(0)]
+        [InlineData(1)]
+        [InlineData(2)]
+        [InlineData(3)]
+        public void PublisherPromptReturnsOnlyExplicitUserChoice(int selectedChoice)
+        {
+            var choices = PublisherChoices();
+            var calls = 0;
+            var host = new LoggerPSHost((caption, message, offeredChoices, defaultChoice) =>
+            {
+                calls++;
+                Assert.Equal("Publisher confirmation", caption);
+                Assert.Equal("PackageManagement.format.ps1xml", message);
+                Assert.Same(choices, offeredChoices);
+                Assert.Equal(1, defaultChoice);
+                return selectedChoice;
+            });
+            Assert.Equal(selectedChoice, host.UI.PromptForChoice("Publisher confirmation", "PackageManagement.format.ps1xml", choices, 1));
+            Assert.Equal(1, calls);
+        }
+
+        [Theory]
+        [InlineData(-1)]
+        [InlineData(4)]
+        public void PublisherPromptRejectsInvalidSelection(int selectedChoice)
+        {
+            var host = new LoggerPSHost((caption, message, choices, defaultChoice) => selectedChoice);
+            Assert.Throws<InvalidOperationException>(() => host.UI.PromptForChoice("Publisher", "File", PublisherChoices(), 1));
+        }
+
+        [Fact]
+        public void PublisherPromptCancellationDoesNotReturnDefault()
+        {
+            var host = new LoggerPSHost((caption, message, choices, defaultChoice) => throw new OperationCanceledException());
+            Assert.Throws<OperationCanceledException>(() => host.UI.PromptForChoice("Publisher", "File", PublisherChoices(), 1));
+        }
 
         [Fact]
         public async Task UnknownInitialStateNeverMutates()
@@ -207,7 +258,7 @@ namespace EXOKit.Tests
 
 namespace EXOKit.Services
 {
-    public enum LogType { Info, Warning }
+    public enum LogType { Info, Warning, Error }
     public static class Logger
     {
         public static void Log(string message, LogType type = LogType.Info) { }

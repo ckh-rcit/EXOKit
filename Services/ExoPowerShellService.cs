@@ -75,6 +75,7 @@ namespace EXOKit.Services
         public CancellationToken OperationCancellationToken { get; set; }
         public string? ConnectedUserPrincipalName { get; private set; }
         public string? ConnectedTenantId { get; private set; }
+        public Func<string, string, System.Collections.ObjectModel.Collection<System.Management.Automation.Host.ChoiceDescription>, int, int>? PromptForChoice { get; set; }
 
         public Task<bool> ConnectAsync(bool useBrowserSignIn = false) => RunOnStaThreadAsync(() =>
         {
@@ -1122,12 +1123,7 @@ namespace EXOKit.Services
             iss.Formats.Clear();
             iss.Types.Clear();
 
-            // The default runspace has no PSHost UI attached, which causes MSAL's WAM broker to fail
-            // with "A window handle must be configured" when it tries to show an interactive popup.
-            // Attaching a custom host and using Connect-ExchangeOnline's device-code flow avoids the
-            // native window handle requirement entirely: the sign-in code/URL is written via
-            // Write-Host, which LoggerPSHost forwards into the app's log panel.
-            _runspace = RunspaceFactory.CreateRunspace(new LoggerPSHost(), iss);
+            _runspace = RunspaceFactory.CreateRunspace(new LoggerPSHost(PromptForChoice), iss);
             _runspace.ApartmentState = ApartmentState.STA;
             _runspace.ThreadOptions = PSThreadOptions.UseCurrentThread;
             _runspace.Open();
