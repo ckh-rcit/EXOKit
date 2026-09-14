@@ -98,5 +98,11 @@ namespace EXOKit.Services
         {
             return values.Where(v => !IsEmailLikeValue(v)).ToArray();
         }
+
+        public static string EscapeCsv(string value)
+        {
+            if (!string.IsNullOrEmpty(value) && ("=+-@".Contains(value.TrimStart().FirstOrDefault()) || value[0] is '\t' or '\r' or '\n')) value = "'" + value;
+            return value.IndexOfAny(new[] { ',', '"', '\r', '\n' }) >= 0 ? "\"" + value.Replace("\"", "\"\"") + "\"" : value;
+        }
     }
 }

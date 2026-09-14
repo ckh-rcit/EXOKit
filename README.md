@@ -142,6 +142,12 @@ Set Bookings Group Object ID when possible. It takes precedence over the display
 matching multiple groups is rejected. Group membership does not itself prove license assignment
 has completed; check licensing separately.
 
+Bookings checks the organization's `BookingsEnabled` setting and the selected OWA policy's
+`BookingsMailboxCreationEnabled` setting before making changes. The confirmation identifies that
+assigning the configured policy replaces the user's entire OWA policy, not just Bookings settings.
+Use a compatible policy and verify effective licensing separately. These reads require access to
+`Get-OrganizationConfig` and `Get-OwaMailboxPolicy`.
+
 ## Operation Safety
 
 Only one service operation runs at a time. Disconnect and Settings are disabled during work, and
@@ -163,6 +169,22 @@ to SMTP addresses, stale loaded state is rejected, and saved values are read bac
 an atomic compare-and-set for these settings; avoid concurrent administration of the same group.
 Mail-enabled security group joining/leaving is owner-managed (Closed).
 
+Starting in v1.0.33, PowerShell collections are read without assuming a generic collection type.
+Missing or malformed settings cannot silently become empty lists. Group Settings comparisons
+ignore list ordering and preserve an independent copy of the loaded values. DG changes use
+`BypassSecurityGroupManagerCheck`, which still requires Microsoft's documented administrator RBAC.
+
+M365 recipient lookup explicitly requests `GroupMailbox` when the ordinary recipient lookup
+finds no match. Graph user input accepts UPN, primary email, SMTP proxy address, or object ID and
+rejects ambiguous matches. Send As checks read the full ACL and compare canonical identities and
+available current/historical SIDs. An unresolved trustee blocks a claim of absence; resolve the
+ACL/SID history manually before retrying. Reports retain unresolved SID grants instead of hiding
+them, and failed owner lookups fail the report rather than producing an apparently complete list.
+
+CSV imports in every section use the recognized identity-column rules described above. Arbitrary
+multi-column files without a recognized identity header are rejected. Exports quote carriage
+returns and line feeds and retain formula-injection protection.
+
 Creation results distinguish partial completion from success. A failed follow-up does not mean the
 new mailbox or group was removed. After a Teams replication failure, wait at least 15 minutes after
 group creation and use Resume Team Provisioning with the existing group's email or object ID.
@@ -179,7 +201,7 @@ results do not qualify for closure.
 
 ## Version and Updates
 
-The title bar and Settings show the installed MSIX version, currently `v1.0.32`; unpackaged builds
+The title bar and Settings show the installed MSIX version, currently `v1.0.33`; unpackaged builds
 use the assembly version. Release tags must use `vMajor.Minor.Build`. The workflow stamps that
 version into the manifest and assembly while retaining the existing package name and publisher.
 Use a version higher than the installed version for an update.
@@ -243,7 +265,10 @@ dotnet list EXOKit.csproj package --vulnerable --include-transitive
 ```
 
 The isolated tests cover retry/verification, cancellation, snapshot persistence and restore policy,
-configuration preservation, and ServiceNow request validation. They do not mutate a live tenant.
+configuration preservation, and ServiceNow request validation. Mock runspaces exercise the actual
+EXO service and Group Settings/mailbox orchestration, including unchanged list round trips and
+snapshot-before-removal failures. HTTP handlers exercise actual Graph SDK identity requests and
+prove cancellation after a ticket lookup prevents its closure PATCH. They do not mutate a live tenant.
 NuGet advisories fail restore. Before production rollout, test EXO/Graph sign-in, one reversible
 permission change and restore, ServiceNow closure, and signed feed enrollment in a test tenant.
 

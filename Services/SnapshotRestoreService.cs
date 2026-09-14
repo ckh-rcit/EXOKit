@@ -100,7 +100,7 @@ namespace EXOKit.Services
                     Logger.Log($"Restored {item.Role} '{item.User}' to group '{groupEmail}'.", LogType.Success);
                     results.Add(new RestoreItemResult { User = item.User, Role = item.Role, Success = true, Message = "Restored" });
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     Logger.Log($"Failed to restore {item.Role} '{item.User}' to group '{groupEmail}'. DETAILS: {ex.Message}", LogType.Error);
                     results.Add(new RestoreItemResult { User = item.User, Role = item.Role, Success = false, Message = ex.Message });
@@ -120,7 +120,7 @@ namespace EXOKit.Services
                     Logger.Log($"Restored {item.Role} for '{item.User}' on '{targetIdentity}'.", LogType.Success);
                     results.Add(new RestoreItemResult { User = item.User, Role = item.Role, Success = true, Message = "Restored" });
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     Logger.Log($"Failed to restore {item.Role} for '{item.User}' on '{targetIdentity}'. DETAILS: {ex.Message}", LogType.Error);
                     results.Add(new RestoreItemResult { User = item.User, Role = item.Role, Success = false, Message = ex.Message });

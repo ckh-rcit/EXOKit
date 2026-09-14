@@ -17,6 +17,89 @@ namespace EXOKit.Tests
         public SafetyTests() => Directory.CreateDirectory(_directory);
         public void Dispose() => Directory.Delete(_directory, true);
 
+        [Theory]
+        [InlineData("FullAccess", "SendAs")]
+        [InlineData("SendAs", "FullAccess")]
+        public void PermissionAccessRightsAcceptExchangeArrayList(string granted, string absent)
+        {
+            var rights = new System.Collections.ArrayList { "ReadPermission", granted };
+            Assert.True(PermissionVerification.HasAccessRight(rights, granted));
+            Assert.False(PermissionVerification.HasAccessRight(rights, absent));
+        }
+
+        [Fact]
+        public void PermissionAccessRightsAcceptStringArray()
+        {
+            Assert.True(PermissionVerification.HasAccessRight(new[] { "fullaccess" }, "FullAccess"));
+            Assert.False(PermissionVerification.HasAccessRight(Array.Empty<string>(), "FullAccess"));
+        }
+
+        [Fact]
+        public void PermissionAccessRightsAcceptWrappedAndScalarValues()
+        {
+            Assert.True(PermissionVerification.HasAccessRight(System.Management.Automation.PSObject.AsPSObject(
+                new System.Collections.ArrayList { System.Management.Automation.PSObject.AsPSObject("FullAccess") }), "FullAccess"));
+            Assert.True(PermissionVerification.HasAccessRight("FullAccess", "FullAccess"));
+            Assert.False(PermissionVerification.HasAccessRight("FullAccess, SendAs", "FullAccess"));
+            Assert.False(PermissionVerification.HasAccessRight(null, "FullAccess"));
+        }
+
+        [Fact]
+        public void PermissionAccessRightsSurvivePowerShellSerialization()
+        {
+            var permission = new System.Management.Automation.PSObject();
+            permission.Properties.Add(new System.Management.Automation.PSNoteProperty("AccessRights",
+                new System.Collections.ArrayList { "FullAccess" }));
+            var serialized = System.Management.Automation.PSSerializer.Serialize(permission);
+            var restored = System.Management.Automation.PSObject.AsPSObject(
+                System.Management.Automation.PSSerializer.Deserialize(serialized));
+            Assert.True(PermissionVerification.HasAccessRight(restored.Properties["AccessRights"].Value, "FullAccess"));
+        }
+
+        [Theory]
+        [InlineData("ManagedBy")]
+        [InlineData("GrantSendOnBehalfTo")]
+        [InlineData("AcceptMessagesOnlyFromSendersOrMembers")]
+        [InlineData("ModeratedBy")]
+        [InlineData("BypassModerationFromSendersOrMembers")]
+        public void ExchangeListsPreserveEverySerializedEntry(string propertyName)
+        {
+            var row = new System.Management.Automation.PSObject();
+            row.Properties.Add(new System.Management.Automation.PSNoteProperty(propertyName,
+                new System.Collections.ArrayList { "first@example.org", "second@example.org" }));
+            var restored = System.Management.Automation.PSObject.AsPSObject(
+                System.Management.Automation.PSSerializer.Deserialize(System.Management.Automation.PSSerializer.Serialize(row)));
+            Assert.Equal(new[] { "first@example.org", "second@example.org" }, PermissionVerification.ReadStrings(restored, propertyName));
+        }
+
+        [Fact]
+        public void ExchangeListsDistinguishEmptyFromUnreadable()
+        {
+            Assert.Empty(PermissionVerification.ReadStrings((object?)null));
+            Assert.Equal(new[] { "one@example.org" }, PermissionVerification.ReadStrings("one@example.org"));
+            Assert.Throws<InvalidOperationException>(() => PermissionVerification.ReadStrings(new System.Collections.Hashtable()));
+            Assert.Throws<InvalidOperationException>(() => PermissionVerification.ReadStrings(new object()));
+            Assert.Throws<InvalidOperationException>(() => PermissionVerification.ReadStrings(new System.Management.Automation.PSObject(), "ManagedBy"));
+        }
+
+        [Fact]
+        public async Task CancellationAfterPermissionReadPreventsMutation()
+        {
+            using var cancellation = new CancellationTokenSource();
+            var mutations = 0;
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => PermissionVerification.ApplyAsync(
+                () => { mutations++; return Task.CompletedTask; },
+                () => { cancellation.Cancel(); return Task.FromResult(false); }, true, NoDelay, cancellation.Token));
+            Assert.Equal(0, mutations);
+        }
+
+        [Theory]
+        [InlineData("first\rsecond", "\"first\rsecond\"")]
+        [InlineData("=SUM(A1)", "'=SUM(A1)")]
+        [InlineData("name, quoted", "\"name, quoted\"")]
+        public void CsvExportQuotesControlCharactersAndNeutralizesFormulas(string value, string expected) =>
+            Assert.Equal(expected, InputParsingHelpers.EscapeCsv(value));
+
         [Fact]
         public void RecipientInputPreservesNamesAndDeduplicatesInOrder()
         {
@@ -386,9 +469,10 @@ namespace EXOKit.Tests
 
 namespace EXOKit.Services
 {
-    public enum LogType { Info, Warning, Error }
+    public enum LogType { Info, Warning, Error, Success, Summary, Ticket }
     public static class Logger
     {
         public static void Log(string message, LogType type = LogType.Info) { }
+        public static void WriteSummary(string action, Dictionary<string, object> results) { }
     }
 }

@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Azure.Identity;
 using Azure.Security.KeyVault.Secrets;
@@ -27,7 +28,9 @@ namespace EXOKit.Services
     public class ServiceNowService
     {
         private readonly ServiceNowConfig _config;
-        private static readonly HttpClient _httpClient = new(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(60) };
+        private static readonly HttpClient SharedHttpClient = new(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(60) };
+        private readonly HttpClient _httpClient = SharedHttpClient;
+        private readonly Func<string, CancellationToken, Task<string>>? _readSecret;
 
         private readonly InteractiveBrowserCredential? _keyVaultCredential;
 
@@ -44,11 +47,21 @@ namespace EXOKit.Services
                 });
         }
 
-        private async Task<string> GetKeyVaultSecretAsync(string vaultUrl, string secretName)
+        internal ServiceNowService(ServiceNowConfig config, HttpClient client, Func<string, CancellationToken, Task<string>> readSecret)
         {
+            _config = config;
+            _httpClient = client;
+            _readSecret = readSecret;
+        }
+
+        private async Task<string> GetKeyVaultSecretAsync(string vaultUrl, string secretName, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_readSecret != null) return await _readSecret(secretName, cancellationToken);
             if (_keyVaultCredential == null) throw new InvalidOperationException("Configure the EXOKit app registration and tenant before using Key Vault.");
             var client = new SecretClient(new Uri(vaultUrl), _keyVaultCredential);
-            using var timeout = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(5));
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromMinutes(5));
             var secret = await client.GetSecretAsync(secretName, cancellationToken: timeout.Token);
             return secret.Value.Value;
         }
@@ -83,8 +96,9 @@ namespace EXOKit.Services
         /// and correct, without making any destructive changes. Used by the Settings page to give the
         /// user immediate feedback when saving ServiceNow configuration.
         /// </summary>
-        public async Task<ServiceNowResult> TestConnectionAsync()
+        public async Task<ServiceNowResult> TestConnectionAsync(CancellationToken cancellationToken = default)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             try { ValidateConfiguration(_config); }
             catch (Exception exception) { return new ServiceNowResult { Message = exception.Message }; }
             if (string.IsNullOrWhiteSpace(_config.InstanceUrl) || string.IsNullOrWhiteSpace(_config.KeyVaultUrl) ||
@@ -106,10 +120,10 @@ namespace EXOKit.Services
             string snUser, snPass;
             try
             {
-                snUser = await GetKeyVaultSecretAsync(_config.KeyVaultUrl, _config.UsernameSecretName);
-                snPass = await GetKeyVaultSecretAsync(_config.KeyVaultUrl, _config.PasswordSecretName);
+                snUser = await GetKeyVaultSecretAsync(_config.KeyVaultUrl, _config.UsernameSecretName, cancellationToken);
+                snPass = await GetKeyVaultSecretAsync(_config.KeyVaultUrl, _config.PasswordSecretName, cancellationToken);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 return new ServiceNowResult { Success = false, Message = $"Failed to retrieve ServiceNow credentials from Key Vault '{_config.KeyVaultUrl}': {DescribeKeyVaultFailure(ex)}" };
             }
@@ -130,7 +144,7 @@ namespace EXOKit.Services
                 request.Headers.Authorization = new AuthenticationHeaderValue("Basic", encodedCreds);
                 request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
-                using var response = await _httpClient.SendAsync(request);
+                using var response = await _httpClient.SendAsync(request, cancellationToken);
 
                 if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized || response.StatusCode == System.Net.HttpStatusCode.Forbidden)
                 {
@@ -153,14 +167,15 @@ namespace EXOKit.Services
             {
                 return new ServiceNowResult { Success = false, Message = $"Could not reach ServiceNow instance '{instanceUrl}': {ex.Message}" };
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 return new ServiceNowResult { Success = false, Message = $"ServiceNow connection test failed: {ex.Message}" };
             }
         }
 
-        public async Task<ServiceNowResult> CloseTaskAsync(string ticketNumber, string workNotes = "", string additionalComments = "")
+        public async Task<ServiceNowResult> CloseTaskAsync(string ticketNumber, string workNotes = "", string additionalComments = "", CancellationToken cancellationToken = default)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             try
             {
                 ValidateConfiguration(_config);
@@ -181,10 +196,10 @@ namespace EXOKit.Services
             string snUser, snPass;
             try
             {
-                snUser = await GetKeyVaultSecretAsync(_config.KeyVaultUrl, _config.UsernameSecretName);
-                snPass = await GetKeyVaultSecretAsync(_config.KeyVaultUrl, _config.PasswordSecretName);
+                snUser = await GetKeyVaultSecretAsync(_config.KeyVaultUrl, _config.UsernameSecretName, cancellationToken);
+                snPass = await GetKeyVaultSecretAsync(_config.KeyVaultUrl, _config.PasswordSecretName, cancellationToken);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 return new ServiceNowResult { Success = false, Message = $"Failed to retrieve ServiceNow credentials from Key Vault: {DescribeKeyVaultFailure(ex)}" };
             }
@@ -203,9 +218,9 @@ namespace EXOKit.Services
                 lookupRequest.Headers.Authorization = new AuthenticationHeaderValue("Basic", encodedCreds);
                 lookupRequest.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
-                using var lookupResponse = await _httpClient.SendAsync(lookupRequest);
+                using var lookupResponse = await _httpClient.SendAsync(lookupRequest, cancellationToken);
                 lookupResponse.EnsureSuccessStatusCode();
-                var lookupJson = await lookupResponse.Content.ReadAsStringAsync();
+                var lookupJson = await lookupResponse.Content.ReadAsStringAsync(cancellationToken);
                 using var lookupDoc = JsonDocument.Parse(lookupJson);
 
                 if (!lookupDoc.RootElement.TryGetProperty("result", out var resultArray) || resultArray.GetArrayLength() == 0)
@@ -219,7 +234,7 @@ namespace EXOKit.Services
                 sysId = GetFieldValue(record, "sys_id");
                 sysClass = GetFieldValue(record, "sys_class_name");
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 return new ServiceNowResult { Success = false, Message = $"Lookup failed for '{ticketNumber}': {ex.Message}" };
             }
@@ -255,15 +270,16 @@ namespace EXOKit.Services
                 updateRequest.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
                 updateRequest.Content = new StringContent(JsonSerializer.Serialize(updatePayload), Encoding.UTF8, "application/json");
 
-                using var updateResponse = await _httpClient.SendAsync(updateRequest);
+                cancellationToken.ThrowIfCancellationRequested();
+                using var updateResponse = await _httpClient.SendAsync(updateRequest, cancellationToken);
                 updateResponse.EnsureSuccessStatusCode();
-                using var updated = JsonDocument.Parse(await updateResponse.Content.ReadAsStringAsync());
+                using var updated = JsonDocument.Parse(await updateResponse.Content.ReadAsStringAsync(cancellationToken));
                 if (!updated.RootElement.TryGetProperty("result", out var updatedRecord) || GetFieldValue(updatedRecord, stateField) != stateValue)
                     return new ServiceNowResult { Message = $"Ticket '{ticketNumber}' update was submitted, but closure state is unconfirmed. Verify it in ServiceNow." };
 
                 return new ServiceNowResult { Success = true, Message = $"Ticket '{ticketNumber}' updated and closed successfully." };
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 return new ServiceNowResult { Success = false, Message = $"Failed to update ticket '{ticketNumber}': {ex.Message}" };
             }

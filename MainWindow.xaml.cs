@@ -453,10 +453,11 @@ namespace EXOKit
 
             var notesText = string.Join(Environment.NewLine, notes);
             if (!await ShowConfirmAsync($"Close ticket '{ticketNumber}' with these verified operation notes?\n\n{notesText}", "Confirm Ticket Closure")) return;
+            _operationCancellation?.Token.ThrowIfCancellationRequested();
             Logger.Log($"[ServiceNow] Attempting to update ticket '{ticketNumber}'...", LogType.Info);
             try
             {
-                var result = await _serviceNowService.CloseTaskAsync(ticketNumber, notesText, notesText);
+                var result = await _serviceNowService.CloseTaskAsync(ticketNumber, notesText, notesText, _exo.OperationCancellationToken);
                 if (result.Success)
                 {
                     Logger.Log($"[ServiceNow] {result.Message}", LogType.Success);
@@ -572,19 +573,13 @@ namespace EXOKit
             {
                 var content = await FileIO.ReadTextAsync(file);
                 string[] values;
-                if (recipientIdentities)
+                if (recipientIdentities || string.Equals(file.FileType, ".csv", StringComparison.OrdinalIgnoreCase))
                 {
                     values = InputParsingHelpers.ParseRecipientFile(content, string.Equals(file.FileType, ".csv", StringComparison.OrdinalIgnoreCase));
                 }
                 else
                 {
-                    using var reader = new StringReader(content);
-                    using var parser = new Microsoft.VisualBasic.FileIO.TextFieldParser(reader);
-                    parser.SetDelimiters(",", ";");
-                    parser.HasFieldsEnclosedInQuotes = true;
-                    var imported = new List<string>();
-                    while (!parser.EndOfData) imported.AddRange(parser.ReadFields() ?? Array.Empty<string>());
-                    values = imported.Select(value => value.Trim()).Where(value => !string.IsNullOrEmpty(value)).ToArray();
+                    values = InputParsingHelpers.ConvertToInputList(content);
                 }
 
                 if (values.Length == 0)
@@ -1122,6 +1117,8 @@ namespace EXOKit
                 return;
             }
 
+            if (!await ShowConfirmAsync($"Assign OWA policy '{_config.Settings.OwaPolicies.BookingsCreators}' to {users.Length} user(s) and add them to the configured Bookings group? This replaces each user's entire OWA policy, including settings unrelated to Bookings. Effective licensing must be verified separately.", "Confirm Bookings Configuration")) return;
+            _exo.OperationCancellationToken.ThrowIfCancellationRequested();
             ButtonEnableBookings.IsEnabled = false;
             try
             {
@@ -1426,15 +1423,7 @@ namespace EXOKit
             }
         }
 
-        private static string CsvEscape(string value)
-        {
-            if (!string.IsNullOrEmpty(value) && ("=+-@".Contains(value.TrimStart().FirstOrDefault()) || value[0] is '\t' or '\r' or '\n')) value = "'" + value;
-            if (value.Contains(',') || value.Contains('"') || value.Contains('\n'))
-            {
-                return "\"" + value.Replace("\"", "\"\"") + "\"";
-            }
-            return value;
-        }
+        private static string CsvEscape(string value) => InputParsingHelpers.EscapeCsv(value);
 
         // --- Snapshots ---
 
@@ -1952,7 +1941,7 @@ namespace EXOKit
                 ButtonSaveSettings.IsEnabled = false;
                 try
                 {
-                    var testResult = await new ServiceNowService(candidateConfig, new GraphApiConfig { ClientId = clientId, TenantId = tenantId }).TestConnectionAsync();
+                    var testResult = await new ServiceNowService(candidateConfig, new GraphApiConfig { ClientId = clientId, TenantId = tenantId }).TestConnectionAsync(_exo.OperationCancellationToken);
                     if (!testResult.Success)
                     {
                         TextBlockSettingsStatus.Text = $"ServiceNow validation failed: {testResult.Message}";

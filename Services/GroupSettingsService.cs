@@ -102,7 +102,7 @@ namespace EXOKit.Services
             };
 
             Logger.Log($"  SUCCESS: Loaded settings for '{identity}'.", LogType.Success);
-            _loaded[identity] = snapshot;
+            _loaded[identity] = System.Text.Json.JsonSerializer.Deserialize<GroupSettingsSnapshot>(System.Text.Json.JsonSerializer.Serialize(snapshot))!;
             return snapshot;
         }
 
@@ -110,7 +110,16 @@ namespace EXOKit.Services
         {
             if (!_loaded.TryGetValue(identity, out var loaded)) throw new InvalidOperationException("Load the group's settings before saving.");
             var current = await LoadSettingsAsync(identity) ?? throw new InvalidOperationException("Group settings unavailable.");
-            if (System.Text.Json.JsonSerializer.Serialize(loaded) != System.Text.Json.JsonSerializer.Serialize(current))
+            if (loaded.AllowExternalSenders != current.AllowExternalSenders
+                || loaded.RequireModeratorApproval != current.RequireModeratorApproval
+                || !string.Equals(loaded.NotifySenderMode, current.NotifySenderMode, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(loaded.JoinRestriction, current.JoinRestriction, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(loaded.DepartRestriction, current.DepartRestriction, StringComparison.OrdinalIgnoreCase)
+                || !SameSet(loaded.SpecifiedSenders, current.SpecifiedSenders)
+                || !SameSet(loaded.SendAsDelegates, current.SendAsDelegates)
+                || !SameSet(loaded.SendOnBehalfDelegates, current.SendOnBehalfDelegates)
+                || !SameSet(loaded.Moderators, current.Moderators)
+                || !SameSet(loaded.BypassModerationSenders, current.BypassModerationSenders))
             {
                 _loaded.Remove(identity);
                 throw new InvalidOperationException("Group settings changed since loading. Reload and review before saving.");
@@ -123,7 +132,7 @@ namespace EXOKit.Services
             {
                 var current = await LoadSettingsAsync(identity);
                 if (current != null && matches(current)) return;
-                await Task.Delay(TimeSpan.FromSeconds(2));
+                await Task.Delay(TimeSpan.FromSeconds(2), _exo.OperationCancellationToken);
             }
             _loaded.Remove(identity);
             throw new InvalidOperationException("Settings change is unconfirmed. Reload and verify before retrying.");
@@ -153,7 +162,7 @@ namespace EXOKit.Services
 
                 return true;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 Logger.Log($"  ERROR: Failed to update delivery management settings for '{identity}'. DETAILS: {ex.Message}", LogType.Error);
                 return false;
@@ -217,7 +226,7 @@ namespace EXOKit.Services
                     catch (Exception ex) when (ex.Message.Contains("Object reference not set to an instance of an object", StringComparison.OrdinalIgnoreCase))
                     {
                         Logger.Log($"  Add Send As for '{d}' returned server error (Object reference not set). Retrying once...", LogType.Warning);
-                        await Task.Delay(2000);
+                        await Task.Delay(2000, _exo.OperationCancellationToken);
                         await _exo.AddSendAsDelegateAsync(identity, d);
                     }
                 }
@@ -232,7 +241,7 @@ namespace EXOKit.Services
                     catch (Exception ex) when (ex.Message.Contains("Object reference not set to an instance of an object", StringComparison.OrdinalIgnoreCase))
                     {
                         Logger.Log($"  Remove Send As for '{d}' returned server error (Object reference not set). Retrying once...", LogType.Warning);
-                        await Task.Delay(2000);
+                        await Task.Delay(2000, _exo.OperationCancellationToken);
                         await _exo.RemoveSendAsDelegateAsync(identity, d);
                     }
                 }
@@ -253,7 +262,7 @@ namespace EXOKit.Services
 
                 return true;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 Logger.Log($"  ERROR: Failed to update delegates for '{identity}'. DETAILS: {ex.Message}", LogType.Error);
                 return false;
@@ -291,7 +300,7 @@ namespace EXOKit.Services
 
                 return true;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 Logger.Log($"  ERROR: Failed to update message approval settings for '{identity}'. DETAILS: {ex.Message}", LogType.Error);
                 return false;
@@ -324,7 +333,7 @@ namespace EXOKit.Services
 
                 return true;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 Logger.Log($"  ERROR: Failed to update membership approval settings for '{identity}'. DETAILS: {ex.Message}", LogType.Error);
                 return false;

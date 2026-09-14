@@ -38,6 +38,8 @@ namespace EXOKit.Services
             var bookingsOwaPolicy = _config.Settings.OwaPolicies.BookingsCreators;
 
             Logger.Log("--- Starting Bookings Access Enablement ---");
+            await _exo.ValidateBookingsConfigurationAsync(bookingsOwaPolicy);
+            Logger.Log("Group membership and OWA policy will be verified. Effective Bookings licensing must be checked separately.", LogType.Warning);
 
             Logger.Log($"Finding Bookings license group '{bookingsGroupName}'...");
             string? bookingsGroupId;
@@ -52,9 +54,9 @@ namespace EXOKit.Services
                 }
                 Logger.Log($"Found group: {bookingsGroupId}");
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                Logger.Log($"ERROR: Bookings group '{bookingsGroupName}' not found. DETAILS: {ex.Message}", LogType.Error);
+                Logger.Log($"ERROR: Bookings group '{bookingsGroupName}' lookup failed. DETAILS: {ex.Message}", LogType.Error);
                 return results;
             }
 
@@ -75,10 +77,10 @@ namespace EXOKit.Services
                     Logger.Log($"  Found Azure AD User: {azureUserId}");
                     userActions.Add("AAD User Found");
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    Logger.Log($"  ERROR: User '{userUpn}' not found (AAD). Skipping. DETAILS: {ex.Message}", LogType.Error);
-                    userActions.Add("AAD User Not Found");
+                    Logger.Log($"  ERROR: User '{userUpn}' could not be resolved (AAD). Skipping. DETAILS: {ex.Message}", LogType.Error);
+                    userActions.Add("ERROR AAD User Lookup");
                     continue;
                 }
 
@@ -98,7 +100,7 @@ namespace EXOKit.Services
                         userActions.Add("Added to Group");
                     }
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     Logger.Log($"    ERROR: Failed adding to group. DETAILS: {ex.Message}", LogType.Error);
                     userActions.Add("ERROR Adding to Group");
@@ -121,7 +123,7 @@ namespace EXOKit.Services
                         userActions.Add("Policy Set");
                     }
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     if (ex.Message.Contains("couldn't be found", StringComparison.OrdinalIgnoreCase))
                     {

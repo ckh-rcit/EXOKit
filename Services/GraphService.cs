@@ -27,6 +27,9 @@ namespace EXOKit.Services
             _scopes = scopes;
         }
 
+        internal GraphService(AuthService authService, GraphServiceClient client) : this(authService, Array.Empty<string>()) =>
+            _graphClient = client;
+
         public void InitializeGraphClient()
         {
             var authProvider = new TokenAuthenticationProvider(_authService, _scopes);
@@ -47,13 +50,27 @@ namespace EXOKit.Services
 
         public async Task<string?> GetUserIdAsync(string userIdentity)
         {
+            ArgumentException.ThrowIfNullOrWhiteSpace(userIdentity);
             try
             {
-                var user = await Client.Users[userIdentity].GetAsync(config =>
+                if (Guid.TryParse(userIdentity, out _))
                 {
+                    var user = await Client.Users[userIdentity].GetAsync(config =>
+                        config.QueryParameters.Select = new[] { "id" }, _authService.OperationCancellationToken);
+                    return user?.Id ?? throw new InvalidOperationException("Graph returned no user identity.");
+                }
+                var escaped = userIdentity.Replace("'", "''");
+                var response = await Client.Users.GetAsync(config =>
+                {
+                    config.QueryParameters.Filter = $"userPrincipalName eq '{escaped}' or mail eq '{escaped}' or proxyAddresses/any(address:address eq 'smtp:{escaped}')";
                     config.QueryParameters.Select = new[] { "id" };
-                });
-                return user?.Id;
+                    config.QueryParameters.Top = 2;
+                }, _authService.OperationCancellationToken);
+                if (response?.Value == null) throw new InvalidOperationException("Graph returned no user lookup response.");
+                if (response.OdataNextLink != null || response.Value.Count > 1)
+                    throw new InvalidOperationException("User identity is ambiguous; use the directory object ID.");
+                if (response.Value.Count == 0) return null;
+                return response.Value[0].Id ?? throw new InvalidOperationException("Graph returned no user identity.");
             }
             catch (ODataError odataEx)
             {
@@ -72,12 +89,13 @@ namespace EXOKit.Services
         {
             try
             {
-                var response = await Client.Groups[groupId].Members.GetAsync(config => config.QueryParameters.Select = new[] { "id" });
+                var response = await Client.Groups[groupId].Members.GetAsync(config => config.QueryParameters.Select = new[] { "id" }, _authService.OperationCancellationToken);
                 while (response != null)
                 {
-                    if (response.Value?.Any(member => member.Id == userId) == true) return true;
+                    if (response.Value == null) throw new InvalidOperationException("Graph returned an unreadable membership list.");
+                    if (response.Value.Any(member => member.Id == userId)) return true;
                     if (string.IsNullOrEmpty(response.OdataNextLink)) return false;
-                    response = await Client.Groups[groupId].Members.WithUrl(response.OdataNextLink).GetAsync();
+                    response = await Client.Groups[groupId].Members.WithUrl(response.OdataNextLink).GetAsync(cancellationToken: _authService.OperationCancellationToken);
                 }
                 throw new InvalidOperationException("Graph returned no membership response.");
             }
@@ -97,12 +115,13 @@ namespace EXOKit.Services
         {
             try
             {
-                var response = await Client.Groups[groupId].Owners.GetAsync(config => config.QueryParameters.Select = new[] { "id" });
+                var response = await Client.Groups[groupId].Owners.GetAsync(config => config.QueryParameters.Select = new[] { "id" }, _authService.OperationCancellationToken);
                 while (response != null)
                 {
-                    if (response.Value?.Any(owner => owner.Id == userId) == true) return true;
+                    if (response.Value == null) throw new InvalidOperationException("Graph returned an unreadable ownership list.");
+                    if (response.Value.Any(owner => owner.Id == userId)) return true;
                     if (string.IsNullOrEmpty(response.OdataNextLink)) return false;
-                    response = await Client.Groups[groupId].Owners.WithUrl(response.OdataNextLink).GetAsync();
+                    response = await Client.Groups[groupId].Owners.WithUrl(response.OdataNextLink).GetAsync(cancellationToken: _authService.OperationCancellationToken);
                 }
                 throw new InvalidOperationException("Graph returned no ownership response.");
             }
@@ -124,12 +143,12 @@ namespace EXOKit.Services
             {
                 OdataId = $"https://graph.microsoft.com/v1.0/directoryObjects/{userId}"
             };
-            await Client.Groups[groupId].Members.Ref.PostAsync(requestBody);
+            await Client.Groups[groupId].Members.Ref.PostAsync(requestBody, cancellationToken: _authService.OperationCancellationToken);
         }
 
         public async Task RemoveGroupMemberAsync(string groupId, string userId)
         {
-            await Client.Groups[groupId].Members[userId].Ref.DeleteAsync();
+            await Client.Groups[groupId].Members[userId].Ref.DeleteAsync(cancellationToken: _authService.OperationCancellationToken);
         }
 
         public async Task AddGroupOwnerAsync(string groupId, string userId)
@@ -138,12 +157,12 @@ namespace EXOKit.Services
             {
                 OdataId = $"https://graph.microsoft.com/v1.0/directoryObjects/{userId}"
             };
-            await Client.Groups[groupId].Owners.Ref.PostAsync(requestBody);
+            await Client.Groups[groupId].Owners.Ref.PostAsync(requestBody, cancellationToken: _authService.OperationCancellationToken);
         }
 
         public async Task RemoveGroupOwnerAsync(string groupId, string userId)
         {
-            await Client.Groups[groupId].Owners[userId].Ref.DeleteAsync();
+            await Client.Groups[groupId].Owners[userId].Ref.DeleteAsync(cancellationToken: _authService.OperationCancellationToken);
         }
 
         /// <summary>
@@ -168,8 +187,9 @@ namespace EXOKit.Services
                     config.QueryParameters.Select = new[] { "id", "groupTypes", "mail" };
                     config.Headers.Add("ConsistencyLevel", "eventual");
                     config.QueryParameters.Count = true;
-                });
+                }, _authService.OperationCancellationToken);
 
+                if (response?.Value == null) throw new InvalidOperationException("Graph returned no group lookup response.");
                 if (response?.OdataNextLink != null || response?.Value?.Count > 1) throw new InvalidOperationException("Group identity is ambiguous; use its object ID.");
                 var group = response?.Value?.SingleOrDefault(g => g.GroupTypes != null && g.GroupTypes.Contains("Unified"));
                 return group?.Id;
@@ -199,7 +219,8 @@ namespace EXOKit.Services
                 {
                     config.QueryParameters.Filter = $"displayName eq '{escaped}'";
                     config.QueryParameters.Select = new[] { "id", "displayName" };
-                });
+                }, _authService.OperationCancellationToken);
+                if (response?.Value == null) throw new InvalidOperationException("Graph returned no group lookup response.");
                 if (response?.OdataNextLink != null || response?.Value?.Count > 1)
                     throw new InvalidOperationException("Multiple groups share this display name. Configure the Bookings GroupId instead.");
                 return response?.Value?.SingleOrDefault()?.Id;
@@ -227,7 +248,7 @@ namespace EXOKit.Services
         {
             try
             {
-                if (await Client.Groups[groupId].Team.GetAsync() != null) return;
+                if (await Client.Groups[groupId].Team.GetAsync(cancellationToken: _authService.OperationCancellationToken) != null) return;
             }
             catch (ODataError exception) when (exception.ResponseStatusCode == 404) { }
             const int maxRetries = 3;
@@ -237,14 +258,15 @@ namespace EXOKit.Services
             {
                 try
                 {
-                    await Client.Groups[groupId].Team.PutAsync(new Team());
+                    var team = await Client.Groups[groupId].Team.PutAsync(new Team(), cancellationToken: _authService.OperationCancellationToken);
+                    if (team == null) throw new InvalidOperationException("Team creation returned no confirmation; verify before retrying.");
                     return;
                 }
                 catch (ODataError odataEx) when (attempt < maxRetries && IsTransientGroupNotFoundError(odataEx))
                 {
                     var delay = retryDelaysMs[attempt];
                     Logger.Log($"Group '{groupId}' is still replicating in Microsoft Graph ({odataEx.Error?.Code}). Retrying Team creation in {delay / 1000}s (attempt {attempt + 1}/{maxRetries})...", LogType.Warning);
-                    await Task.Delay(delay);
+                    await Task.Delay(delay, _authService.OperationCancellationToken);
                 }
                 catch (ODataError odataEx)
                 {

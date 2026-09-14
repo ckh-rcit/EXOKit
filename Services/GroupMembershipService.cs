@@ -175,13 +175,13 @@ namespace EXOKit.Services
                 {
                     groupContext = await ResolveGroupOperationContextAsync(groupEmail, exoConnected, graphConnected);
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     Logger.Log($"ERROR: Group '{groupEmail}' could not be resolved. Skipping. DETAILS: {ex.Message}", LogType.Error);
                     foreach (var userEmail in userList)
                     {
                         GetOrCreateResultList(resultMap, userEmail, groupEmail, out var statuses);
-                        statuses.Add("Group Not Found");
+                        statuses.Add("Group Lookup Error");
                     }
                     continue;
                 }
@@ -205,25 +205,34 @@ namespace EXOKit.Services
                     string? mgUserId = null;
                     RecipientInfo? userRecipient = null;
 
-                    if (groupContext.GroupKind == GroupKind.M365)
+                    try
                     {
-                        mgUserId = await _graph.GetUserIdAsync(userEmail);
-                        if (string.IsNullOrEmpty(mgUserId))
+                        if (groupContext.GroupKind == GroupKind.M365)
                         {
-                            Logger.Log($"    ERROR: User '{userEmail}' not found (Graph). Skipping.", LogType.Error);
-                            statuses.Add("User Not Found (Graph)");
-                            continue;
+                            mgUserId = await _graph.GetUserIdAsync(userEmail);
+                            if (string.IsNullOrEmpty(mgUserId))
+                            {
+                                Logger.Log($"    ERROR: User '{userEmail}' not found (Graph). Skipping.", LogType.Error);
+                                statuses.Add("User Not Found (Graph)");
+                                continue;
+                            }
+                        }
+                        else
+                        {
+                            userRecipient = await _exo.GetRecipientAsync(userEmail);
+                            if (userRecipient == null)
+                            {
+                                Logger.Log($"    ERROR: User '{userEmail}' not found (EXO). Skipping.", LogType.Error);
+                                statuses.Add("User Not Found (EXO)");
+                                continue;
+                            }
                         }
                     }
-                    else
+                    catch (Exception exception) when (exception is not OperationCanceledException)
                     {
-                        userRecipient = await _exo.GetRecipientAsync(userEmail);
-                        if (userRecipient == null)
-                        {
-                            Logger.Log($"    ERROR: User '{userEmail}' not found (EXO). Skipping.", LogType.Error);
-                            statuses.Add("User Not Found (EXO)");
-                            continue;
-                        }
+                        Logger.Log($"User '{userEmail}' lookup failed: {exception.Message}", LogType.Error);
+                        statuses.Add("User Lookup Error");
+                        continue;
                     }
 
                     foreach (var role in new[] { GroupRole.Member, GroupRole.Owner })
@@ -234,7 +243,14 @@ namespace EXOKit.Services
                         }
 
                         Logger.Log($"    Attempting {operationType} {role}...");
-                        var isPresent = await TestGroupRolePresenceAsync(groupContext.GroupKind, role, groupEmail, groupContext.M365GroupId, mgUserId, userRecipient, userEmail);
+                        bool isPresent;
+                        try { isPresent = await TestGroupRolePresenceAsync(groupContext.GroupKind, role, groupEmail, groupContext.M365GroupId, mgUserId, userRecipient, userEmail); }
+                        catch (Exception exception) when (exception is not OperationCanceledException)
+                        {
+                            Logger.Log($"Cannot read {role} for '{userEmail}': {exception.Message}", LogType.Error);
+                            statuses.Add($"{role} (Error - Read Failed)");
+                            continue;
+                        }
 
                         if (operationType == PermissionOperationType.Add)
                         {
@@ -311,16 +327,9 @@ namespace EXOKit.Services
             }
             catch (Exception ex)
             {
-                if (ex.Message.Contains("already", StringComparison.OrdinalIgnoreCase))
-                {
-                    Logger.Log($"    STATUS: Already {role}.", LogType.Warning);
-                    statuses.Add($"{role} (Already Exists)");
-                }
-                else
-                {
-                    Logger.Log($"    ERROR: Failed Add {role}. DETAILS: {ex.Message}", LogType.Error);
-                    statuses.Add($"{role} (Error)");
-                }
+                if (ex is OperationCanceledException) throw;
+                Logger.Log($"    ERROR: Failed Add {role}. DETAILS: {ex.Message}", LogType.Error);
+                statuses.Add($"{role} (Error - Verify Before Retrying)");
             }
         }
 
@@ -378,19 +387,11 @@ namespace EXOKit.Services
             }
             catch (Exception ex)
             {
+                if (ex is OperationCanceledException) throw;
                 if (role == GroupRole.Owner && ex.Message.Contains("last owner", StringComparison.OrdinalIgnoreCase))
                 {
                     Logger.Log($"    WARNING: Cannot remove the last owner from M365 Group '{groupEmail}'.", LogType.Warning);
                     statuses.Add("Owner (Skipped - Last Owner Cannot Remove)");
-                    snapshotItems.RemoveAll(si => si.Role == role.ToString() && string.Equals(si.User, userEmail, StringComparison.OrdinalIgnoreCase));
-                }
-                else if (IsNotFoundError(ex.Message))
-                {
-                    Logger.Log($"    STATUS: {role} not found.", LogType.Warning);
-                    statuses.Add($"{role} (Not Found)");
-                    // The removal genuinely didn't apply, so the speculative snapshot item captured above
-                    // (in case the pre-check was a false negative) doesn't reflect a real prior state and
-                    // must be removed to avoid a bogus restore entry.
                     snapshotItems.RemoveAll(si => si.Role == role.ToString() && string.Equals(si.User, userEmail, StringComparison.OrdinalIgnoreCase));
                 }
                 else
@@ -419,7 +420,7 @@ namespace EXOKit.Services
 
             for (var attempt = 1; attempt <= maxAttempts && pending.Count > 0; attempt++)
             {
-                await Task.Delay(delayMs);
+                await Task.Delay(delayMs, _exo.OperationCancellationToken);
                 var remaining = new List<(string User, GroupRole Role, GroupKind GroupKind, string? GroupId, string? UserId, RecipientInfo? UserRecipient)>();
 
                 foreach (var item in pending)
@@ -503,10 +504,5 @@ namespace EXOKit.Services
             }
         }
 
-        private static bool IsNotFoundError(string message) =>
-            message.Contains("isn't a member", StringComparison.OrdinalIgnoreCase) ||
-            message.Contains("wasn't found", StringComparison.OrdinalIgnoreCase) ||
-            message.Contains("doesn't exist", StringComparison.OrdinalIgnoreCase) ||
-            message.Contains("not found", StringComparison.OrdinalIgnoreCase);
     }
 }

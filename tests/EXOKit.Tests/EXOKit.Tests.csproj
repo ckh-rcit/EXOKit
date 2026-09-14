@@ -7,13 +7,27 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
   <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.Versioning.SupportedOSPlatformAttribute">
+      <_Parameter1>windows</_Parameter1>
+    </AssemblyAttribute>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" PrivateAssets="all" />
     <PackageReference Include="Azure.Identity" Version="1.21.0" />
     <PackageReference Include="Azure.Security.KeyVault.Secrets" Version="4.11.1" />
     <PackageReference Include="System.Management.Automation" Version="7.6.6" />
+    <PackageReference Include="Microsoft.Graph" Version="6.6.0" />
+    <PackageReference Include="Microsoft.Identity.Client" Version="4.89.0" />
+    <Compile Include="..\..\Services\GraphService.cs" Link="Services\GraphService.cs" />
+    <Compile Include="..\..\Services\AuthService.cs" Link="Services\AuthService.cs" />
+    <Compile Include="..\..\Services\TokenAuthenticationProvider.cs" Link="Services\TokenAuthenticationProvider.cs" />
     <Compile Include="..\..\Services\LoggerPSHost.cs" Link="Services\LoggerPSHost.cs" />
+    <Compile Include="..\..\Services\ExoPowerShellService.cs" Link="Services\ExoPowerShellService.cs" />
+    <Compile Include="..\..\Services\MailboxPermissionService.cs" Link="Services\MailboxPermissionService.cs" />
+    <Compile Include="..\..\Services\GroupSettingsService.cs" Link="Services\GroupSettingsService.cs" />
+    <Compile Include="..\..\Services\GroupMembershipService.cs" Link="Services\GroupMembershipService.cs" />
+    <Compile Include="..\..\Services\SnapshotRestoreService.cs" Link="Services\SnapshotRestoreService.cs" />
+    <Compile Include="..\..\Services\BookingsService.cs" Link="Services\BookingsService.cs" />
     <Compile Include="..\..\Services\PermissionVerification.cs" Link="Services\PermissionVerification.cs" />
     <Compile Include="..\..\Services\ConfigService.cs" Link="Services\ConfigService.cs" />
     <Compile Include="..\..\Services\InputParsingHelpers.cs" Link="Services\InputParsingHelpers.cs" />

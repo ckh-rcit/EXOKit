@@ -72,10 +72,26 @@ namespace EXOKit.Services
             {
                 Logger.Log($"Processing {targetType}: {targetIdentity}");
 
-                var mailboxExists = await _exo.MailboxExistsAsync(targetIdentity, resourceOnly: targetType == PermissionTargetType.Resource);
+                bool mailboxExists;
+                try { mailboxExists = await _exo.MailboxExistsAsync(targetIdentity, resourceOnly: targetType == PermissionTargetType.Resource); }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    Logger.Log($"Target '{targetIdentity}' lookup failed: {exception.Message}", LogType.Error);
+                    foreach (var user in userList)
+                    {
+                        GetOrCreateResultList(resultMap, user, targetIdentity, out var statuses);
+                        statuses.Add("Target Lookup Error");
+                    }
+                    continue;
+                }
                 if (!mailboxExists)
                 {
                     Logger.Log($"{targetType} '{targetIdentity}' not found. Skipping.", LogType.Error);
+                    foreach (var user in userList)
+                    {
+                        GetOrCreateResultList(resultMap, user, targetIdentity, out var statuses);
+                        statuses.Add("Target Not Found");
+                    }
                     continue;
                 }
 
@@ -88,10 +104,18 @@ namespace EXOKit.Services
                 {
                     Logger.Log($"Processing User: {user} for {targetType}: {targetIdentity}");
 
-                    var userObject = await _exo.GetRecipientAsync(user);
                     if (!GetOrCreateResultList(resultMap, user, targetIdentity, out var statuses))
                     {
                         // just created; continue
+                    }
+
+                    RecipientInfo? userObject;
+                    try { userObject = await _exo.GetRecipientAsync(user); }
+                    catch (Exception exception) when (exception is not OperationCanceledException)
+                    {
+                        Logger.Log($"User '{user}' lookup failed: {exception.Message}", LogType.Error);
+                        statuses.Add("User Lookup Error");
+                        continue;
                     }
 
                     if (userObject == null)
@@ -120,7 +144,7 @@ namespace EXOKit.Services
 
                 if (permissions.SendOnBehalf && operationType == PermissionOperationType.Remove)
                 {
-                    await CaptureSendOnBehalfBeforeStateAsync(targetIdentity, sendOnBehalfList, snapshotItems);
+                    await CaptureSendOnBehalfBeforeStateAsync(targetIdentity, sendOnBehalfList, snapshotItems, resultMap);
                 }
 
                 if (sendOnBehalfList.Count > 0)
@@ -181,7 +205,14 @@ namespace EXOKit.Services
             // because the operation is unsupported, not because of a transient server bug. Check the
             // target's recipient type upfront and fail fast with an actionable message instead of
             // retrying an operation that can never succeed.
-            var recipientTypeDetails = await _exo.GetRecipientTypeAsync(targetIdentity);
+            string recipientTypeDetails;
+            try { recipientTypeDetails = await _exo.GetRecipientTypeAsync(targetIdentity); }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                Logger.Log($"Full Access target lookup failed: {exception.Message}", LogType.Error);
+                statuses.Add("Full Access (Error - Target Lookup Failed)");
+                return;
+            }
             if (string.Equals(recipientTypeDetails, "GroupMailbox", StringComparison.OrdinalIgnoreCase))
             {
                 Logger.Log(
@@ -229,14 +260,10 @@ namespace EXOKit.Services
                     validationQueue.Add((user, "Full Access"));
                 }
             }
+            catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
-                if (operationType == PermissionOperationType.Remove && IsNotFoundError(ex.Message))
-                {
-                    Logger.Log("Full Access not found.", LogType.Warning);
-                    statuses.Add("Full Access (Not Found)");
-                }
-                else if (IsNullReferenceServerError(ex.Message))
+                if (IsNullReferenceServerError(ex.Message))
                 {
                     Logger.Log($"Full Access {operationType} could not establish permission state after retries. Verify manually.", LogType.Warning);
                     statuses.Add("Full Access (Unconfirmed - Read Failed)");
@@ -292,18 +319,10 @@ namespace EXOKit.Services
                     validationQueue.Add((user, "Send As"));
                 }
             }
+            catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
-                if (ex.Message.Contains("wasn't found on object", StringComparison.OrdinalIgnoreCase))
-                {
-                    Logger.Log("Send As not found (confirmed by remove).", LogType.Warning);
-                    statuses.Add("Send As (Not Found)");
-                    // The removal genuinely didn't apply, so the speculative snapshot item captured above
-                    // (in case the pre-check was a false negative) doesn't reflect a real prior state and
-                    // must be removed to avoid a bogus restore entry.
-                    snapshotItems.RemoveAll(si => si.Role == "Send As" && string.Equals(si.User, user, StringComparison.OrdinalIgnoreCase));
-                }
-                else if (IsNullReferenceServerError(ex.Message))
+                if (IsNullReferenceServerError(ex.Message))
                 {
                     Logger.Log($"Send As {operationType} could not establish permission state after retries. Verify manually.", LogType.Warning);
                     statuses.Add("Send As (Unconfirmed - Read Failed)");
@@ -342,7 +361,8 @@ namespace EXOKit.Services
             }
         }
 
-        private async Task CaptureSendOnBehalfBeforeStateAsync(string targetIdentity, List<string> sendOnBehalfList, List<SnapshotItem> snapshotItems)
+        private async Task CaptureSendOnBehalfBeforeStateAsync(string targetIdentity, List<string> sendOnBehalfList, List<SnapshotItem> snapshotItems,
+            Dictionary<string, Dictionary<string, List<string>>> resultMap)
         {
             try
             {
@@ -358,13 +378,20 @@ namespace EXOKit.Services
                         SaveBeforeRemoval(targetIdentity, requestedUser, "Send on Behalf");
                         captured.Add(requestedUser);
                     }
+                    else
+                    {
+                        ReplaceStatus(resultMap[requestedUser][targetIdentity], "Send on Behalf (Pending Removal)", "Send on Behalf (Not Found - No Change)");
+                    }
                 }
                 sendOnBehalfList.RemoveAll(user => !captured.Contains(user, StringComparer.OrdinalIgnoreCase));
             }
+            catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
                 Logger.Log($"Failed to capture Send on Behalf snapshot for '{targetIdentity}'. DETAILS: {ex.Message}", LogType.Warning);
-                throw;
+                foreach (var user in sendOnBehalfList)
+                    ReplaceStatus(resultMap[user][targetIdentity], "Send on Behalf (Pending Removal)", "Send on Behalf (Error - Before-State Unconfirmed)");
+                sendOnBehalfList.Clear();
             }
         }
 
@@ -398,6 +425,7 @@ namespace EXOKit.Services
                     }
                 }
             }
+            catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
                 Logger.Log($"Failed Send on Behalf {operationType} for '{targetIdentity}'. DETAILS: {ex.Message}", LogType.Error);
@@ -431,7 +459,7 @@ namespace EXOKit.Services
 
             for (var attempt = 1; attempt <= maxAttempts && pending.Count > 0; attempt++)
             {
-                await Task.Delay(delayMs);
+                await Task.Delay(delayMs, _exo.OperationCancellationToken);
                 var remaining = new List<(string User, string Permission)>();
 
                 foreach (var item in pending)
@@ -452,6 +480,7 @@ namespace EXOKit.Services
                         _ => false
                         };
                     }
+                    catch (OperationCanceledException) { throw; }
                     catch (Exception exception)
                     {
                         Logger.Log($"Verification unavailable for '{item.User}': {exception.Message}", LogType.Warning);
@@ -520,11 +549,6 @@ namespace EXOKit.Services
             });
         }
 
-        private static bool IsNotFoundError(string message) =>
-            message.Contains("doesn't exist", StringComparison.OrdinalIgnoreCase) ||
-            message.Contains("wasn't found", StringComparison.OrdinalIgnoreCase) ||
-            message.Contains("Cannot find", StringComparison.OrdinalIgnoreCase) ||
-            message.Contains("ACE", StringComparison.OrdinalIgnoreCase);
     }
 
     internal static class FluentExtensions

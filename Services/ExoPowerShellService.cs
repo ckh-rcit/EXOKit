@@ -77,6 +77,10 @@ namespace EXOKit.Services
         public string? ConnectedTenantId { get; private set; }
         public Func<string, string, System.Collections.ObjectModel.Collection<System.Management.Automation.Host.ChoiceDescription>, int, int>? PromptForChoice { get; set; }
 
+        public ExoPowerShellService() { }
+
+        internal ExoPowerShellService(Runspace runspace) => _runspace = runspace;
+
         public Task<bool> ConnectAsync(bool useBrowserSignIn = false) => RunOnStaThreadAsync(() =>
         {
             try
@@ -210,18 +214,35 @@ namespace EXOKit.Services
         });
 
         public Task<RecipientInfo?> GetRecipientAsync(string identity) => RunOnStaThreadAsync(() =>
+            FindRecipient(identity));
+
+        private RecipientInfo? FindRecipient(string identity)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(identity);
+            return FindRecipient(identity, false) ?? FindRecipient(identity, true);
+        }
+
+        private RecipientInfo? FindRecipient(string identity, bool groupMailbox)
         {
             using var ps = PowerShell.Create();
             ps.Runspace = _runspace;
-            ps.AddCommand("Get-Recipient").AddParameter("Identity", identity).AddParameter("ErrorAction", "Stop");
+            ps.AddCommand("Get-Recipient").AddParameter("Identity", identity).AddParameter("ErrorAction", "Continue");
+            if (groupMailbox) ps.AddParameter("RecipientTypeDetails", "GroupMailbox");
             var results = ps.Invoke();
+            if (ps.HadErrors && ps.Streams.Error.Count > 0 && ps.Streams.Error.All(IsMissingRecipient)) return null;
             if (ps.HadErrors) throw BuildPipelineException(ps);
             if (results.Count == 0) return null;
+            if (results.Count != 1) throw new InvalidOperationException("Recipient identity is ambiguous; use its object ID.");
             return ToRecipientInfo(results[0]);
-        });
+        }
+
+        private static bool IsMissingRecipient(ErrorRecord error) =>
+            error.CategoryInfo.Category == ErrorCategory.ObjectNotFound
+            && error.FullyQualifiedErrorId.Contains("ManagementObjectNotFoundException", StringComparison.Ordinal);
 
         public Task<bool> MailboxExistsAsync(string identity, bool resourceOnly = false) => RunOnStaThreadAsync(() =>
         {
+            ArgumentException.ThrowIfNullOrWhiteSpace(identity);
             using var ps = PowerShell.Create();
             ps.Runspace = _runspace;
             ps.AddCommand("Get-Mailbox").AddParameter("Identity", identity);
@@ -229,27 +250,21 @@ namespace EXOKit.Services
             {
                 ps.AddParameter("RecipientTypeDetails", new[] { "RoomMailbox", "EquipmentMailbox" });
             }
-            ps.AddParameter("ErrorAction", "Stop");
+            ps.AddParameter("ErrorAction", "Continue");
             var results = ps.Invoke();
+            if (ps.HadErrors && ps.Streams.Error.Count > 0 && ps.Streams.Error.All(IsMissingRecipient)) return false;
             if (ps.HadErrors) throw BuildPipelineException(ps);
+            if (results.Count > 1) throw new InvalidOperationException("Mailbox identity is ambiguous.");
             return results.Count > 0;
         });
 
-        public Task<string> GetRecipientTypeAsync(string identity) => RunOnStaThreadAsync(() =>
-        {
-            using var ps = PowerShell.Create();
-            ps.Runspace = _runspace;
-            ps.AddCommand("Get-EXORecipient").AddParameter("Identity", identity).AddParameter("ErrorAction", "Stop");
-            var results = ps.Invoke();
-            if (ps.HadErrors) throw BuildPipelineException(ps);
-            if (results.Count == 0) return "Not Found";
-            return results[0].Properties["RecipientTypeDetails"]?.Value?.ToString() ?? "Unknown";
-        });
+        public async Task<string> GetRecipientTypeAsync(string identity) =>
+            (await GetRecipientAsync(identity))?.RecipientTypeDetails ?? "Not Found";
 
         // --- Full Access / Send As / Send on Behalf ---
 
         public Task<bool> HasFullAccessAsync(string mailboxIdentity, string userIdentity, RecipientInfo userObject) =>
-            PermissionVerification.ReadAsync(() => HasFullAccessCoreAsync(mailboxIdentity, userIdentity, userObject));
+            PermissionVerification.ReadAsync(() => HasFullAccessCoreAsync(mailboxIdentity, userIdentity, userObject), cancellationToken: OperationCancellationToken);
 
         private Task<bool> HasFullAccessCoreAsync(string mailboxIdentity, string userIdentity, RecipientInfo userObject) => RunOnStaThreadAsync(() =>
         {
@@ -258,15 +273,15 @@ namespace EXOKit.Services
             using (var ps = PowerShell.Create())
             {
                 ps.Runspace = _runspace;
-                ps.AddCommand("Get-EXOMailboxPermission").AddParameter("Identity", mailboxIdentity).AddParameter("ErrorAction", "SilentlyContinue");
+                ps.AddCommand("Get-EXOMailboxPermission").AddParameter("Identity", mailboxIdentity).AddParameter("ResultSize", "Unlimited").AddParameter("ErrorAction", "Stop");
                 var results = ps.Invoke();
                 CheckForNullReferenceServerError(ps);
                 foreach (var r in results)
                 {
-                    var accessRights = r.Properties["AccessRights"]?.Value as IEnumerable<object>;
+                    var accessRights = r.Properties["AccessRights"]?.Value;
                     var deny = r.Properties["Deny"]?.Value is bool d && d;
                     var user = r.Properties["User"]?.Value?.ToString() ?? string.Empty;
-                    if (!deny && userKeys.Contains(user) && (accessRights?.Any(a => string.Equals(a?.ToString(), "FullAccess", StringComparison.OrdinalIgnoreCase)) ?? false))
+                    if (!deny && userKeys.Contains(user) && PermissionVerification.HasAccessRight(accessRights, "FullAccess"))
                     {
                         return true;
                     }
@@ -281,9 +296,9 @@ namespace EXOKit.Services
                 CheckForNullReferenceServerError(ps);
                 foreach (var r in results)
                 {
-                    var accessRights = r.Properties["AccessRights"]?.Value as IEnumerable<object>;
+                    var accessRights = r.Properties["AccessRights"]?.Value;
                     var deny = r.Properties["Deny"]?.Value is bool d && d;
-                    if (!deny && (accessRights?.Any(a => string.Equals(a?.ToString(), "FullAccess", StringComparison.OrdinalIgnoreCase)) ?? false))
+                    if (!deny && PermissionVerification.HasAccessRight(accessRights, "FullAccess"))
                     {
                         return true;
                     }
@@ -297,7 +312,7 @@ namespace EXOKit.Services
         {
             var user = await GetRecipientAsync(userIdentity) ?? throw new InvalidOperationException("Permission recipient not found.");
             await PermissionVerification.ApplyAsync(() => AddFullAccessCoreAsync(mailboxIdentity, userIdentity),
-                () => HasFullAccessAsync(mailboxIdentity, userIdentity, user), true);
+                () => HasFullAccessAsync(mailboxIdentity, userIdentity, user), true, cancellationToken: OperationCancellationToken);
         }
 
         private Task AddFullAccessCoreAsync(string mailboxIdentity, string userIdentity) => RunOnStaThreadAsync(() =>
@@ -319,7 +334,7 @@ namespace EXOKit.Services
         {
             var user = await GetRecipientAsync(userIdentity) ?? throw new InvalidOperationException("Permission recipient not found.");
             await PermissionVerification.ApplyAsync(() => RemoveFullAccessCoreAsync(mailboxIdentity, userIdentity),
-                () => HasFullAccessAsync(mailboxIdentity, userIdentity, user), false);
+                () => HasFullAccessAsync(mailboxIdentity, userIdentity, user), false, cancellationToken: OperationCancellationToken);
         }
 
         private Task RemoveFullAccessCoreAsync(string mailboxIdentity, string userIdentity) => RunOnStaThreadAsync(() =>
@@ -338,26 +353,54 @@ namespace EXOKit.Services
         });
 
         public Task<bool> HasSendAsAsync(string mailboxIdentity, string userIdentity) =>
-            PermissionVerification.ReadAsync(() => HasSendAsCoreAsync(mailboxIdentity, userIdentity));
+            PermissionVerification.ReadAsync(() => HasSendAsCoreAsync(mailboxIdentity, userIdentity), cancellationToken: OperationCancellationToken);
 
         private Task<bool> HasSendAsCoreAsync(string mailboxIdentity, string userIdentity) => RunOnStaThreadAsync(() =>
         {
+            ArgumentException.ThrowIfNullOrWhiteSpace(mailboxIdentity);
+            var recipient = FindRecipient(userIdentity)
+                ?? throw new InvalidOperationException("Send As recipient could not be resolved; state is unconfirmed.");
+            var keys = new HashSet<string>(recipient.Keys(userIdentity), StringComparer.OrdinalIgnoreCase);
+            if (recipient.RecipientTypeDetails?.Contains("Group", StringComparison.OrdinalIgnoreCase) != true)
+            {
+                using var principalQuery = PowerShell.Create();
+                principalQuery.Runspace = _runspace;
+                principalQuery.AddCommand("Get-User").AddParameter("Identity", userIdentity).AddParameter("ErrorAction", "Stop");
+                var principals = principalQuery.Invoke();
+                if (principalQuery.HadErrors) throw BuildPipelineException(principalQuery);
+                if (principals.Count != 1) throw new InvalidOperationException("Trustee security identity is unavailable; state is unconfirmed.");
+                foreach (var property in new[] { "Sid", "SidHistory" })
+                    foreach (var value in PermissionVerification.ReadStrings(principals[0].Properties[property]?.Value))
+                        keys.Add(value);
+            }
             using var ps = PowerShell.Create();
             ps.Runspace = _runspace;
-            ps.AddCommand("Get-RecipientPermission").AddParameter("Identity", mailboxIdentity).AddParameter("Trustee", userIdentity).AddParameter("ErrorAction", "SilentlyContinue");
+            ps.AddCommand("Get-RecipientPermission").AddParameter("Identity", mailboxIdentity)
+              .AddParameter("ResultSize", "Unlimited").AddParameter("ErrorAction", "Stop");
             var results = ps.Invoke();
             CheckForNullReferenceServerError(ps);
-            return results.Any(r =>
+            var unresolved = new List<string>();
+            foreach (var row in results)
             {
-                var accessRights = r.Properties["AccessRights"]?.Value as IEnumerable<object>;
-                var deny = r.Properties["AccessControlType"]?.Value?.ToString() == "Deny";
-                return !deny && (accessRights?.Any(a => string.Equals(a?.ToString(), "SendAs", StringComparison.OrdinalIgnoreCase)) ?? false);
-            });
+                if (string.Equals(row.Properties["AccessControlType"]?.Value?.ToString(), "Deny", StringComparison.OrdinalIgnoreCase)
+                    || (row.Properties["IsInherited"]?.Value is bool inherited && inherited)
+                    || !PermissionVerification.HasAccessRight(row.Properties["AccessRights"]?.Value, "SendAs")) continue;
+                var trustee = row.Properties["Trustee"]?.Value?.ToString();
+                if (string.Equals(trustee, "NT AUTHORITY\\SELF", StringComparison.OrdinalIgnoreCase)) continue;
+                if (trustee != null && keys.Contains(trustee)) return true;
+                if (string.IsNullOrWhiteSpace(trustee)) { unresolved.Add("<empty trustee>"); continue; }
+                var resolved = FindRecipient(trustee);
+                if (resolved == null) { unresolved.Add(trustee); continue; }
+                if (resolved.Keys(trustee).Any(keys.Contains)) return true;
+            }
+            if (unresolved.Count > 0)
+                throw new InvalidOperationException("Send As ACL contains unresolved trustees; absence cannot be confirmed. Verify trustee SID history before retrying.");
+            return false;
         });
 
         public Task AddSendAsAsync(string mailboxIdentity, string userIdentity) =>
             PermissionVerification.ApplyAsync(() => AddSendAsCoreAsync(mailboxIdentity, userIdentity),
-                () => HasSendAsAsync(mailboxIdentity, userIdentity), true);
+                () => HasSendAsAsync(mailboxIdentity, userIdentity), true, cancellationToken: OperationCancellationToken);
 
         private Task AddSendAsCoreAsync(string mailboxIdentity, string userIdentity) => RunOnStaThreadAsync(() =>
         {
@@ -375,7 +418,7 @@ namespace EXOKit.Services
 
         public Task RemoveSendAsAsync(string mailboxIdentity, string userIdentity) =>
             PermissionVerification.ApplyAsync(() => RemoveSendAsCoreAsync(mailboxIdentity, userIdentity),
-                () => HasSendAsAsync(mailboxIdentity, userIdentity), false);
+                () => HasSendAsAsync(mailboxIdentity, userIdentity), false, cancellationToken: OperationCancellationToken);
 
         private Task RemoveSendAsCoreAsync(string mailboxIdentity, string userIdentity) => RunOnStaThreadAsync(() =>
         {
@@ -436,16 +479,8 @@ namespace EXOKit.Services
 
         // --- Distribution Groups ---
 
-        public Task<string?> GetDistributionGroupTypeAsync(string identity) => RunOnStaThreadAsync(() =>
-        {
-            using var ps = PowerShell.Create();
-            ps.Runspace = _runspace;
-            ps.AddCommand("Get-Recipient").AddParameter("Identity", identity).AddParameter("ErrorAction", "SilentlyContinue");
-            var results = ps.Invoke();
-            if (ps.HadErrors) throw BuildPipelineException(ps);
-            if (results.Count == 0) return null;
-            return results[0].Properties["RecipientTypeDetails"]?.Value?.ToString();
-        });
+        public async Task<string?> GetDistributionGroupTypeAsync(string identity) =>
+            (await GetRecipientAsync(identity))?.RecipientTypeDetails;
 
         public Task<bool> IsDistributionGroupMemberAsync(string groupIdentity, RecipientInfo userObject, string userIdentity) => RunOnStaThreadAsync(() =>
         {
@@ -475,9 +510,15 @@ namespace EXOKit.Services
             var results = ps.Invoke();
             if (ps.HadErrors) throw BuildPipelineException(ps);
             if (results.Count == 0) return false;
-            var managedBy = results[0].Properties["ManagedBy"]?.Value as IEnumerable<object>;
-            if (managedBy == null) return false;
-            return managedBy.Any(m => m != null && userKeys.Contains(m.ToString()!));
+            var managedBy = PermissionVerification.ReadStrings(results[0], "ManagedBy");
+            foreach (var owner in managedBy)
+            {
+                if (userKeys.Contains(owner)) return true;
+                var resolved = FindRecipient(owner)
+                    ?? throw new InvalidOperationException($"Owner '{owner}' could not be resolved; ownership is unconfirmed.");
+                if (resolved.Keys(owner).Any(userKeys.Contains)) return true;
+            }
+            return false;
         });
 
         public Task AddDistributionGroupMemberAsync(string groupIdentity, string userIdentity) => RunOnStaThreadAsync(() =>
@@ -487,6 +528,7 @@ namespace EXOKit.Services
             ps.AddCommand("Add-DistributionGroupMember")
               .AddParameter("Identity", groupIdentity)
               .AddParameter("Member", userIdentity)
+                            .AddParameter("BypassSecurityGroupManagerCheck", true)
               .AddParameter("Confirm", false)
               .AddParameter("ErrorAction", "Stop");
             ps.Invoke();
@@ -500,6 +542,7 @@ namespace EXOKit.Services
             ps.AddCommand("Remove-DistributionGroupMember")
               .AddParameter("Identity", groupIdentity)
               .AddParameter("Member", userIdentity)
+                            .AddParameter("BypassSecurityGroupManagerCheck", true)
               .AddParameter("Confirm", false)
               .AddParameter("ErrorAction", "Stop");
             ps.Invoke();
@@ -535,6 +578,25 @@ namespace EXOKit.Services
         });
 
         // --- Bookings ---
+
+        public Task ValidateBookingsConfigurationAsync(string policyName) => RunOnStaThreadAsync(() =>
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(policyName);
+            using var organization = PowerShell.Create();
+            organization.Runspace = _runspace;
+            organization.AddCommand("Get-OrganizationConfig").AddParameter("ErrorAction", "Stop");
+            var organizations = organization.Invoke();
+            if (organization.HadErrors) throw BuildPipelineException(organization);
+            if (organizations.Count != 1 || organizations[0].Properties["BookingsEnabled"]?.Value is not true)
+                throw new InvalidOperationException("Bookings is disabled or its organization setting could not be verified. No access changes were made.");
+            using var policy = PowerShell.Create();
+            policy.Runspace = _runspace;
+            policy.AddCommand("Get-OwaMailboxPolicy").AddParameter("Identity", policyName).AddParameter("ErrorAction", "Stop");
+            var policies = policy.Invoke();
+            if (policy.HadErrors) throw BuildPipelineException(policy);
+            if (policies.Count != 1 || policies[0].Properties["BookingsMailboxCreationEnabled"]?.Value is not true)
+                throw new InvalidOperationException("The configured OWA policy does not enable Bookings creation, or its setting could not be verified. No access changes were made.");
+        });
 
         public Task<string?> GetOwaMailboxPolicyAsync(string userIdentity) => RunOnStaThreadAsync(() =>
         {
@@ -609,7 +671,8 @@ namespace EXOKit.Services
                 ps.AddCommand(isDynamic ? "Get-DynamicDistributionGroup" : "Get-DistributionGroup").AddParameter("Identity", groupIdentity).AddParameter("ErrorAction", "Stop");
                 var results = ps.Invoke();
                 if (ps.HadErrors) throw BuildPipelineException(ps);
-                managedBy = (results.Count > 0 ? results[0].Properties["ManagedBy"]?.Value as IEnumerable : null)?.Cast<object>().Select(o => o?.ToString() ?? string.Empty).ToArray() ?? Array.Empty<string>();
+                if (results.Count != 1) throw new InvalidOperationException("Group could not be read; report is unconfirmed.");
+                managedBy = PermissionVerification.ReadStrings(results[0], "ManagedBy");
             }
 
             foreach (var owner in managedBy)
@@ -618,6 +681,8 @@ namespace EXOKit.Services
                 ps.Runspace = _runspace;
                 ps.AddCommand("Get-Recipient").AddParameter("Identity", owner).AddParameter("ErrorAction", "SilentlyContinue");
                 var results = ps.Invoke();
+                if (ps.HadErrors) throw BuildPipelineException(ps);
+                if (results.Count != 1) throw new InvalidOperationException($"Owner '{owner}' could not be resolved; report is incomplete.");
                 if (results.Count > 0)
                 {
                     rows.Add((results[0].Properties["DisplayName"]?.Value?.ToString() ?? string.Empty, results[0].Properties["PrimarySmtpAddress"]?.Value?.ToString() ?? string.Empty, "Owner"));
@@ -653,7 +718,7 @@ namespace EXOKit.Services
         /// permission entries.
         /// </summary>
         public Task<List<string>> GetAllFullAccessDelegatesAsync(string mailboxIdentity) =>
-            PermissionVerification.ReadAsync(() => GetAllFullAccessDelegatesCoreAsync(mailboxIdentity));
+            PermissionVerification.ReadAsync(() => GetAllFullAccessDelegatesCoreAsync(mailboxIdentity), cancellationToken: OperationCancellationToken);
 
         private Task<List<string>> GetAllFullAccessDelegatesCoreAsync(string mailboxIdentity) => RunOnStaThreadAsync(() =>
         {
@@ -666,14 +731,14 @@ namespace EXOKit.Services
             return results
                 .Where(r =>
                 {
-                    var accessRights = r.Properties["AccessRights"]?.Value as IEnumerable<object>;
+                    var accessRights = r.Properties["AccessRights"]?.Value;
                     var deny = r.Properties["Deny"]?.Value is bool d && d;
                     var user = r.Properties["User"]?.Value?.ToString() ?? string.Empty;
                     return !deny
                         && !(r.Properties["IsInherited"]?.Value is bool inherited && inherited)
-                        && (accessRights?.Any(a => string.Equals(a?.ToString(), "FullAccess", StringComparison.OrdinalIgnoreCase)) ?? false)
+                        && PermissionVerification.HasAccessRight(accessRights, "FullAccess")
                         && !user.StartsWith("NT AUTHORITY\\", StringComparison.OrdinalIgnoreCase)
-                        && !user.StartsWith("S-1-5-", StringComparison.OrdinalIgnoreCase);
+                        && !string.IsNullOrWhiteSpace(user);
                 })
                 .Select(r => r.Properties["User"]?.Value?.ToString() ?? string.Empty)
                 .ToList();
@@ -685,7 +750,7 @@ namespace EXOKit.Services
         /// be extremely slow (or appear to hang) on mailboxes with many system/inherited entries.
         /// </summary>
         public Task<List<string>> GetAllSendAsDelegatesAsync(string mailboxIdentity) =>
-            PermissionVerification.ReadAsync(() => GetAllSendAsDelegatesCoreAsync(mailboxIdentity));
+            PermissionVerification.ReadAsync(() => GetAllSendAsDelegatesCoreAsync(mailboxIdentity), cancellationToken: OperationCancellationToken);
 
         private Task<List<string>> GetAllSendAsDelegatesCoreAsync(string mailboxIdentity) => RunOnStaThreadAsync(() =>
         {
@@ -698,13 +763,14 @@ namespace EXOKit.Services
             return results
                 .Where(r =>
                 {
-                    var accessRights = r.Properties["AccessRights"]?.Value as IEnumerable<object>;
+                    var accessRights = r.Properties["AccessRights"]?.Value;
                     var deny = r.Properties["AccessControlType"]?.Value?.ToString() == "Deny";
                     var trustee = r.Properties["Trustee"]?.Value?.ToString() ?? string.Empty;
                     return !deny
-                        && (accessRights?.Any(a => string.Equals(a?.ToString(), "SendAs", StringComparison.OrdinalIgnoreCase)) ?? false)
+                        && !(r.Properties["IsInherited"]?.Value is bool inherited && inherited)
+                        && PermissionVerification.HasAccessRight(accessRights, "SendAs")
                         && !trustee.StartsWith("NT AUTHORITY\\", StringComparison.OrdinalIgnoreCase)
-                        && !trustee.StartsWith("S-1-5-", StringComparison.OrdinalIgnoreCase);
+                        && !string.IsNullOrWhiteSpace(trustee);
                 })
                 .Select(r => r.Properties["Trustee"]?.Value?.ToString() ?? string.Empty)
                 .ToList();
@@ -723,8 +789,7 @@ namespace EXOKit.Services
             if (ps.HadErrors) throw BuildPipelineException(ps);
             if (results.Count == 0) return new List<string>();
 
-            var delegates = results[0].Properties["GrantSendOnBehalfTo"]?.Value as IEnumerable;
-            if (delegates == null) return new List<string>();
+            var delegates = PermissionVerification.ReadStrings(results[0], "GrantSendOnBehalfTo");
 
             var resolved = new List<string>();
             foreach (var delegateObj in delegates)
@@ -912,8 +977,7 @@ namespace EXOKit.Services
             var r = results[0];
             string?[] ToStringArray(string propName)
             {
-                var val = r.Properties[propName]?.Value as IEnumerable<object>;
-                return val?.Select(v => v?.ToString()).Where(v => !string.IsNullOrEmpty(v)).ToArray() ?? Array.Empty<string?>();
+                return PermissionVerification.ReadStrings(r, propName);
             }
 
             return new DistributionGroupSettings
@@ -944,6 +1008,7 @@ namespace EXOKit.Services
               .AddParameter("Identity", identity)
               .AddParameter("RequireSenderAuthenticationEnabled", !allowExternalSenders)
               .AddParameter("AcceptMessagesOnlyFromSendersOrMembers", specifiedSenders)
+              .AddParameter("BypassSecurityGroupManagerCheck", true)
               .AddParameter("Confirm", false)
               .AddParameter("ErrorAction", "Stop");
             ps.Invoke();
@@ -955,7 +1020,7 @@ namespace EXOKit.Services
         /// EAC "Edit delegates" panel's delegate list (Send As portion).
         /// </summary>
         public Task<List<string>> GetSendAsDelegatesAsync(string identity) =>
-            PermissionVerification.ReadAsync(() => GetSendAsDelegatesCoreAsync(identity));
+            PermissionVerification.ReadAsync(() => GetSendAsDelegatesCoreAsync(identity), cancellationToken: OperationCancellationToken);
 
         private Task<List<string>> GetSendAsDelegatesCoreAsync(string identity) => RunOnStaThreadAsync(() =>
         {
@@ -988,6 +1053,7 @@ namespace EXOKit.Services
                         ps.AddCommand("Set-DistributionGroup")
                             .AddParameter("Identity", identity)
                             .AddParameter("GrantSendOnBehalfTo", new Hashtable { ["Add"] = delegateIdentity })
+              .AddParameter("BypassSecurityGroupManagerCheck", true)
               .AddParameter("Confirm", false)
               .AddParameter("ErrorAction", "Stop");
             ps.Invoke();
@@ -1006,6 +1072,7 @@ namespace EXOKit.Services
             ps.AddCommand("Set-DistributionGroup")
               .AddParameter("Identity", identity)
               .AddParameter("GrantSendOnBehalfTo", delegates)
+              .AddParameter("BypassSecurityGroupManagerCheck", true)
               .AddParameter("Confirm", false)
               .AddParameter("ErrorAction", "Stop");
             ps.Invoke();
@@ -1028,6 +1095,7 @@ namespace EXOKit.Services
               .AddParameter("ModeratedBy", moderators)
               .AddParameter("BypassModerationFromSendersOrMembers", bypassSenders)
               .AddParameter("SendModerationNotifications", notifySenderMode)
+              .AddParameter("BypassSecurityGroupManagerCheck", true)
               .AddParameter("Confirm", false)
               .AddParameter("ErrorAction", "Stop");
             ps.Invoke();
@@ -1047,6 +1115,7 @@ namespace EXOKit.Services
               .AddParameter("Identity", identity)
               .AddParameter("MemberJoinRestriction", memberJoinRestriction)
               .AddParameter("MemberDepartRestriction", memberDepartRestriction)
+              .AddParameter("BypassSecurityGroupManagerCheck", true)
               .AddParameter("Confirm", false)
               .AddParameter("ErrorAction", "Stop");
             ps.Invoke();
