@@ -179,10 +179,25 @@ results do not qualify for closure.
 
 ## Version and Updates
 
-The title bar and Settings show the installed MSIX version, currently `v1.0.28`; unpackaged builds
+The title bar and Settings show the installed MSIX version, currently `v1.0.31`; unpackaged builds
 use the assembly version. Release tags must use `vMajor.Minor.Build`. The workflow stamps that
 version into the manifest and assembly while retaining the existing package name and publisher.
 Use a version higher than the installed version for an update.
+
+### Publisher migration in v1.0.31
+
+Starting with v1.0.31, the publisher is `CN=CKH-RCIT`. This changes the Windows package family;
+it is not an in-place update of v1.0.30 or earlier. Back up settings and snapshots from the old
+installation before removing it, including any package-redirected application data. Install the
+new release's public certificate using its trust bundle after verifying the certificate fingerprint,
+then install the new package and confirm configuration and snapshots before retiring the old app.
+Do not assume Windows will migrate data or sign-in state between package families.
+
+Existing releases and their original trust bundles are retained for legacy installations. Their
+signed binaries were not rebuilt when Git history was sanitized; historical source tags now contain
+the sanitized publisher text and are not exact identity matches for those archived binaries. Do not
+rerun an old release tag using the new signing secrets. Future automatic updates apply within the
+new package family after installation through its `.appinstaller` feed.
 
 Set the repository Actions variable `APPINSTALLER_FEED_URL` to a stable, publicly reachable HTTPS
 URL serving `EXOKit.appinstaller`. For a public GitHub repository, a possible feed location is

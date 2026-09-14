@@ -14,7 +14,7 @@
 	  3. Keep "EXOKitSigning.pfx" somewhere safe (or delete it once the secrets are saved -
 		 it is not needed locally afterward).
 	  4. Distribute "EXOKitSigning.cer" (the public certificate, no private key) to anyone who
-		 needs to install the MSIX, so they can add it to their Trusted People / Trusted Root store.
+		 needs to install the MSIX, so they can add it to their Trusted People store.
 
 .NOTES
 	This certificate is for internal/sideload distribution only. It will show a warning the first
