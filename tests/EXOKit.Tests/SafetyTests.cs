@@ -18,6 +18,42 @@ namespace EXOKit.Tests
         public void Dispose() => Directory.Delete(_directory, true);
 
         [Fact]
+        public void HostedRunspaceCanImportLocalScriptModule()
+        {
+            var modulePath = Path.Combine(_directory, "PolicyProbe.psm1");
+            File.WriteAllText(modulePath, "function Get-EXOKitPolicyProbe { 'module-loaded' }");
+            var state = LoggerPSHost.CreateInitialSessionState();
+            Assert.Equal(Microsoft.PowerShell.ExecutionPolicy.RemoteSigned, state.ExecutionPolicy);
+            Assert.NotNull(state.AuthorizationManager);
+            using var runspace = System.Management.Automation.Runspaces.RunspaceFactory.CreateRunspace(new LoggerPSHost(), state);
+            runspace.Open();
+            using var pipeline = System.Management.Automation.PowerShell.Create();
+            pipeline.Runspace = runspace;
+            pipeline.AddCommand("Import-Module").AddParameter("Name", modulePath).AddParameter("ErrorAction", "Stop");
+            pipeline.Invoke();
+            Assert.False(pipeline.HadErrors);
+            pipeline.Commands.Clear();
+            pipeline.AddCommand("Get-EXOKitPolicyProbe");
+            Assert.Equal("module-loaded", Assert.Single(pipeline.Invoke()).ToString());
+        }
+
+        [Fact]
+        public void HostedRunspaceRejectsUnsignedInternetModule()
+        {
+            var modulePath = Path.Combine(_directory, "InternetPolicyProbe.psm1");
+            File.WriteAllText(modulePath, "function Get-EXOKitInternetProbe { 'must-not-run' }");
+            File.WriteAllText(modulePath + ":Zone.Identifier", "[ZoneTransfer]\r\nZoneId=3\r\n");
+            using var runspace = System.Management.Automation.Runspaces.RunspaceFactory.CreateRunspace(
+                new LoggerPSHost(), LoggerPSHost.CreateInitialSessionState());
+            runspace.Open();
+            using var pipeline = System.Management.Automation.PowerShell.Create();
+            pipeline.Runspace = runspace;
+            pipeline.AddCommand("Import-Module").AddParameter("Name", modulePath).AddParameter("ErrorAction", "Stop");
+            var exception = Assert.Throws<System.Management.Automation.CmdletInvocationException>(() => pipeline.Invoke());
+            Assert.Contains("not digitally signed", exception.Message, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
         public void PublisherPromptWithoutUiDoesNotSilentlyChooseDefault()
         {
             var choices = PublisherChoices();

@@ -22,6 +22,15 @@ namespace EXOKit.Services
             _ui = new LoggerPSHostUserInterface(promptForChoice);
         }
 
+        public static System.Management.Automation.Runspaces.InitialSessionState CreateInitialSessionState()
+        {
+            var state = System.Management.Automation.Runspaces.InitialSessionState.CreateDefault2();
+            state.ExecutionPolicy = Microsoft.PowerShell.ExecutionPolicy.RemoteSigned;
+            state.Formats.Clear();
+            state.Types.Clear();
+            return state;
+        }
+
         public override CultureInfo CurrentCulture => CultureInfo.CurrentCulture;
         public override CultureInfo CurrentUICulture => CultureInfo.CurrentUICulture;
         public override Guid InstanceId => _instanceId;

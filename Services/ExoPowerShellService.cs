@@ -1119,9 +1119,7 @@ namespace EXOKit.Services
             // Clearing the Formats/Types entries before opening the runspace skips that file loading
             // entirely while keeping the core cmdlets; ExchangeOnlineManagement loads its own formatting
             // data when imported, so the default set isn't needed here.
-            var iss = InitialSessionState.CreateDefault2();
-            iss.Formats.Clear();
-            iss.Types.Clear();
+            var iss = LoggerPSHost.CreateInitialSessionState();
 
             _runspace = RunspaceFactory.CreateRunspace(new LoggerPSHost(PromptForChoice), iss);
             _runspace.ApartmentState = ApartmentState.STA;
