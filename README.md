@@ -199,11 +199,24 @@ the sanitized publisher text and are not exact identity matches for those archiv
 rerun an old release tag using the new signing secrets. Future automatic updates apply within the
 new package family after installation through its `.appinstaller` feed.
 
-Set the repository Actions variable `APPINSTALLER_FEED_URL` to a stable, publicly reachable HTTPS
-URL serving `EXOKit.appinstaller`. For a public GitHub repository, a possible feed location is
-`https://github.com/<owner>/<repo>/releases/latest/download/EXOKit.appinstaller`. The release workflow
-generates and uploads the feed and points it to that release's signed x64 MSIX. For external hosting,
-publish the generated feed at the configured URL after each release. Private/authenticated release
+The stable update feed is hosted at
+`https://ckh-rcit.github.io/EXOKit/EXOKit.appinstaller`. Download and open that file with Windows
+App Installer once to enroll an existing v1.0.31 installation or install the current release.
+Verify and trust the current release certificate first. In EXOKit Settings, set Update Feed URL to
+that same address and save it so Check for Updates opens the feed. Existing saved settings are not
+overwritten when a new package supplies a default feed URL.
+
+The repository Actions variable `APPINSTALLER_FEED_URL` must equal the address above, and GitHub
+Pages must use GitHub Actions as its publishing source. The Publish Update Feed workflow runs after
+a successful Build and Release workflow, or manually through Run workflow. It checks out the default
+branch, reads the latest stable release's published MSIX manifest, and generates the feed using that
+package's identity and version. The publisher rejects package-family mismatches and feed downgrades.
+Deployments are serialized. Only the generated `.appinstaller` is uploaded to Pages; installers and
+public certificate trust bundles stay in GitHub Releases. The site root has no landing page.
+
+The release workflow also generates an `.appinstaller` asset when the variable is configured.
+An existing release can be enrolled by running Publish Update Feed without rebuilding its signed
+MSIX. Release signing secrets are not available to the Pages job. Private/authenticated release
 downloads require a separate distribution solution.
 
 Without that variable, releases remain direct MSIX downloads with no update enrollment. No hosting
