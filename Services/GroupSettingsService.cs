@@ -43,6 +43,7 @@ namespace EXOKit.Services
         private readonly ExoPowerShellService _exo;
         private readonly SnapshotService _snapshots;
         private readonly Dictionary<string, GroupSettingsSnapshot> _loaded = new(StringComparer.OrdinalIgnoreCase);
+        public string? LastError { get; private set; }
 
         public GroupSettingsService(ExoPowerShellService exo, SnapshotService? snapshots = null)
         {
@@ -56,15 +57,18 @@ namespace EXOKit.Services
         /// </summary>
         public async Task<string?> ValidateDistributionGroupAsync(string identity)
         {
+            LastError = null;
             var groupType = await _exo.GetDistributionGroupTypeAsync(identity);
             if (groupType == null)
             {
+                LastError = $"Group '{identity}' not found.";
                 Logger.Log($"  ERROR: Group '{identity}' not found.", LogType.Error);
                 return null;
             }
 
             if (!SupportedDistributionGroupTypes.Contains(groupType, StringComparer.OrdinalIgnoreCase))
             {
+                LastError = $"'{identity}' is a '{groupType}'. This section supports Distribution Groups and Mail-Enabled Security Groups only.";
                 Logger.Log($"  ERROR: '{identity}' is a '{groupType}', not a Distribution Group or Mail-Enabled Security Group. Microsoft 365 Groups are not supported in this section.", LogType.Error);
                 return null;
             }
@@ -81,6 +85,7 @@ namespace EXOKit.Services
             var settings = await _exo.GetDistributionGroupSettingsAsync(identity);
             if (settings == null)
             {
+                LastError = $"Could not read settings for '{identity}'.";
                 Logger.Log($"  ERROR: Could not read settings for '{identity}'.", LogType.Error);
                 return null;
             }
@@ -164,6 +169,8 @@ namespace EXOKit.Services
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
+                LastError = ex.Message;
+                _loaded.Remove(identity);
                 Logger.Log($"  ERROR: Failed to update delivery management settings for '{identity}'. DETAILS: {ex.Message}", LogType.Error);
                 return false;
             }
@@ -264,6 +271,8 @@ namespace EXOKit.Services
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
+                LastError = ex.Message;
+                _loaded.Remove(identity);
                 Logger.Log($"  ERROR: Failed to update delegates for '{identity}'. DETAILS: {ex.Message}", LogType.Error);
                 return false;
             }
@@ -275,6 +284,7 @@ namespace EXOKit.Services
 
             if (requireModeratorApproval && moderators.Length == 0)
             {
+                LastError = "At least one moderator is required when moderator approval is enabled.";
                 Logger.Log("  ERROR: At least one moderator is required when moderator approval is enabled.", LogType.Error);
                 return false;
             }
@@ -302,6 +312,8 @@ namespace EXOKit.Services
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
+                LastError = ex.Message;
+                _loaded.Remove(identity);
                 Logger.Log($"  ERROR: Failed to update message approval settings for '{identity}'. DETAILS: {ex.Message}", LogType.Error);
                 return false;
             }
@@ -335,6 +347,8 @@ namespace EXOKit.Services
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
+                LastError = ex.Message;
+                _loaded.Remove(identity);
                 Logger.Log($"  ERROR: Failed to update membership approval settings for '{identity}'. DETAILS: {ex.Message}", LogType.Error);
                 return false;
             }

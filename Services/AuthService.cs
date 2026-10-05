@@ -22,6 +22,7 @@ namespace EXOKit.Services
 
         public bool IsGraphConnected { get; private set; }
         public string? ConnectedUser { get; private set; }
+        public string? LastError { get; private set; }
 
         public AuthService(string[] graphScopes, Func<IntPtr> parentWindowHandleProvider, string clientId, string tenantId)
         {
@@ -31,7 +32,7 @@ namespace EXOKit.Services
             if (!Guid.TryParse(clientId, out _) || !Guid.TryParse(tenantId, out _)) return;
             _app = PublicClientApplicationBuilder.Create(clientId)
                 .WithAuthority($"https://login.microsoftonline.com/{tenantId}")
-                .WithDefaultRedirectUri()
+                .WithRedirectUri("http://localhost")
                 .Build();
         }
 
@@ -39,6 +40,7 @@ namespace EXOKit.Services
         {
             try
             {
+                LastError = null;
                 Logger.Log("Connecting to Microsoft Graph...");
                 var result = await AcquireTokenAsync(_graphScopes);
                 IsGraphConnected = result != null;
@@ -55,6 +57,9 @@ namespace EXOKit.Services
             catch (Exception ex)
             {
                 IsGraphConnected = false;
+                ConnectedUser = null;
+                ConnectedTenantId = null;
+                LastError = ex.Message;
                 Logger.Log($"Graph connection failed: {ex.Message}", LogType.Error);
                 return false;
             }
@@ -117,6 +122,7 @@ namespace EXOKit.Services
 
             return await _app.AcquireTokenInteractive(scopes)
                 .WithClaims(claims)
+                .WithUseEmbeddedWebView(false)
                 .WithParentActivityOrWindow(_parentWindowHandleProvider())
                 .ExecuteAsync(timeout.Token);
         }

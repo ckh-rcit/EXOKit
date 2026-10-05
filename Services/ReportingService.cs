@@ -15,6 +15,8 @@ namespace EXOKit.Services
         public string ObjectType { get; set; } = string.Empty;
         public string MemberOrDelegate { get; set; } = string.Empty;
         public string RoleOrPermission { get; set; } = string.Empty;
+        public string Status { get; set; } = "Read";
+        public bool HasWarning => Status != "Read";
     }
 
     /// <summary>
@@ -57,6 +59,14 @@ namespace EXOKit.Services
             _exo = exo;
         }
 
+        public static IEnumerable<string> CreateCsvLines(IEnumerable<ReportRow> rows)
+        {
+            yield return "ObjectName,ObjectPrimarySmtpAddress,ObjectType,MemberOrDelegate,RoleOrPermission,Status";
+            foreach (var row in rows)
+                yield return string.Join(",", new[] { row.ObjectName, row.ObjectPrimarySmtpAddress, row.ObjectType,
+                    row.MemberOrDelegate, row.RoleOrPermission, row.Status }.Select(InputParsingHelpers.EscapeCsv));
+        }
+
         /// <summary>
         /// Generates the full membership/ownership or permission report for a single Group/DL/DDG/
         /// Security Group/Mailbox, mirroring M365_Reporting_Tool.ps1's Get-Recipient dispatch logic.
@@ -73,6 +83,16 @@ namespace EXOKit.Services
             var objectSmtp = recipient.PrimarySmtpAddress ?? identity;
             var recipientType = recipient.RecipientTypeDetails ?? string.Empty;
             var rows = new List<ReportRow>();
+
+            void AddUnresolvedOwner(string owner, string error) => rows.Add(new ReportRow
+            {
+                ObjectName = objectName,
+                ObjectPrimarySmtpAddress = objectSmtp,
+                ObjectType = recipientType,
+                MemberOrDelegate = owner,
+                RoleOrPermission = "Owner",
+                Status = $"Unresolved: {error}"
+            });
 
             switch (recipientType)
             {
@@ -91,7 +111,7 @@ namespace EXOKit.Services
                     }
                 case "MailUniversalDistributionGroup":
                     {
-                        var links = await _exo.GetDistributionGroupReportLinksAsync(recipient.Identity ?? identity, isDynamic: false);
+                        var links = await _exo.GetDistributionGroupReportLinksAsync(recipient.Identity ?? identity, isDynamic: false, onUnresolvedOwner: AddUnresolvedOwner);
                         rows.AddRange(links.Select(l => new ReportRow
                         {
                             ObjectName = objectName,
@@ -104,7 +124,7 @@ namespace EXOKit.Services
                     }
                 case "DynamicDistributionGroup":
                     {
-                        var links = await _exo.GetDistributionGroupReportLinksAsync(recipient.Identity ?? identity, isDynamic: true);
+                        var links = await _exo.GetDistributionGroupReportLinksAsync(recipient.Identity ?? identity, isDynamic: true, onUnresolvedOwner: AddUnresolvedOwner);
                         rows.AddRange(links.Select(l => new ReportRow
                         {
                             ObjectName = objectName,
@@ -117,7 +137,7 @@ namespace EXOKit.Services
                     }
                 case "MailUniversalSecurityGroup":
                     {
-                        var links = await _exo.GetDistributionGroupReportLinksAsync(recipient.Identity ?? identity, isDynamic: false);
+                        var links = await _exo.GetDistributionGroupReportLinksAsync(recipient.Identity ?? identity, isDynamic: false, onUnresolvedOwner: AddUnresolvedOwner);
                         rows.AddRange(links.Select(l => new ReportRow
                         {
                             ObjectName = objectName,
@@ -213,53 +233,43 @@ namespace EXOKit.Services
             var objectSmtp = recipient?.PrimarySmtpAddress ?? mailboxIdentity;
             var recipientType = recipient?.RecipientTypeDetails ?? string.Empty;
 
-            // Use the resolved recipient Identity (not the raw, user-typed identity) when calling the
-            // REST-backed EXO permission cmdlets. Get-EXOMailboxPermission/Get-EXORecipientPermission
-            // resolve -Identity more strictly than legacy cmdlets, and per Microsoft's docs, a value that
-            // doesn't cleanly resolve causes the cmdlet to silently return *all* objects in the tenant
-            // instead of erroring - which looks exactly like an indefinite hang on large tenants.
             return await BuildMailboxPermissionRowsAsync(recipient?.Identity ?? mailboxIdentity, objectName, objectSmtp, recipientType);
         }
 
         private async Task<List<ReportRow>> BuildMailboxPermissionRowsAsync(string mailboxIdentity, string objectName, string objectSmtp, string recipientType)
         {
             var rows = new List<ReportRow>();
-
-            // Stepwise progress logging (mirroring M365_Reporting_Tool.ps1's Update-Status calls before each
-            // permission-type lookup) so the log window shows exactly which call is in flight/slow, rather than
-            // a single opaque "Getting delegates..." line for all three REST calls.
-            Logger.Log("Getting Full Access permissions...");
-            var fullAccess = await _exo.GetAllFullAccessDelegatesAsync(mailboxIdentity);
-            rows.AddRange(fullAccess.Select(u => new ReportRow
+            ReportRow CreateRow(string principal, string permission, string status = "Read") => new()
             {
                 ObjectName = objectName,
                 ObjectPrimarySmtpAddress = objectSmtp,
                 ObjectType = recipientType,
-                MemberOrDelegate = u,
-                RoleOrPermission = "Full Access"
-            }));
-
-            Logger.Log("Getting Send As permissions...");
-            var sendAs = await _exo.GetAllSendAsDelegatesAsync(mailboxIdentity);
-            rows.AddRange(sendAs.Select(u => new ReportRow
+                MemberOrDelegate = principal,
+                RoleOrPermission = permission,
+                Status = status
+            };
+            var sections = new (string Permission, Func<Task<List<string>>> Read)[]
             {
-                ObjectName = objectName,
-                ObjectPrimarySmtpAddress = objectSmtp,
-                ObjectType = recipientType,
-                MemberOrDelegate = u,
-                RoleOrPermission = "Send As"
-            }));
-
-            Logger.Log("Getting Send on Behalf permissions...");
-            var sendOnBehalf = await _exo.GetAllSendOnBehalfDelegatesAsync(mailboxIdentity);
-            rows.AddRange(sendOnBehalf.Select(u => new ReportRow
+                ("Full Access", () => _exo.GetAllFullAccessDelegatesAsync(mailboxIdentity)),
+                ("Send As", () => _exo.GetAllSendAsDelegatesAsync(mailboxIdentity)),
+                ("Send on Behalf", () => _exo.GetAllSendOnBehalfDelegatesAsync(mailboxIdentity,
+                    (principal, error) => rows.Add(CreateRow(principal, "Send on Behalf", $"Unresolved: {error}"))))
+            };
+            foreach (var section in sections)
             {
-                ObjectName = objectName,
-                ObjectPrimarySmtpAddress = objectSmtp,
-                ObjectType = recipientType,
-                MemberOrDelegate = u,
-                RoleOrPermission = "Send on Behalf"
-            }));
+                _exo.OperationCancellationToken.ThrowIfCancellationRequested();
+                Logger.Log($"Getting {section.Permission} permissions...");
+                try
+                {
+                    var principals = await section.Read();
+                    rows.AddRange(principals.Select(principal => CreateRow(principal, section.Permission)));
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException && !_exo.OperationCancellationToken.IsCancellationRequested)
+                {
+                    rows.Add(CreateRow(string.Empty, section.Permission, $"Unavailable: {ex.Message}"));
+                    Logger.Log($"{section.Permission} report incomplete: {ex.Message}", LogType.Warning);
+                }
+            }
 
             return rows;
         }

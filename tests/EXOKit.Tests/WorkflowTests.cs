@@ -7,6 +7,81 @@ namespace EXOKit.Tests;
 
 public sealed class WorkflowTests
 {
+    [Theory]
+    [InlineData("Connected", "Active", true)]
+    [InlineData("Connected", "Expired", false)]
+    [InlineData("Disconnected", "Active", false)]
+    public void AuthenticationRequiresActiveExchangeToken(string state, string token, bool valid)
+    {
+        var connection = new PSObject();
+        connection.Properties.Add(new PSNoteProperty("State", state));
+        connection.Properties.Add(new PSNoteProperty("TokenStatus", token));
+        if (valid) ExoPowerShellService.ValidateConnection(connection);
+        else Assert.Throws<InvalidOperationException>(() => ExoPowerShellService.ValidateConnection(connection));
+    }
+
+    [Fact]
+    public void AuthenticationRetriesWamOnlyThroughBrowser()
+    {
+        using var runspace = CreateRunspace("""
+            function Connect-ExchangeOnline { [CmdletBinding()] param([switch]$DisableWAM,[switch]$SkipLoadingFormatData,$ShowBanner)
+                $global:attempts++
+                if (!$DisableWAM) { throw 'A window handle must be configured.' }
+            }
+            """);
+        using var powershell = PowerShell.Create();
+        powershell.Runspace = runspace;
+        ExoPowerShellService.InvokeInteractiveConnection(powershell, false);
+        Assert.Equal(2, runspace.SessionStateProxy.GetVariable("attempts"));
+    }
+
+    [Fact]
+    public void AuthenticationDoesNotRetryConsentFailure()
+    {
+        using var runspace = CreateRunspace("""
+            function Connect-ExchangeOnline { [CmdletBinding()] param([switch]$DisableWAM,[switch]$SkipLoadingFormatData,$ShowBanner)
+                $global:attempts++
+                throw 'AADSTS65001 consent required'
+            }
+            """);
+        using var powershell = PowerShell.Create();
+        powershell.Runspace = runspace;
+        Assert.ThrowsAny<Exception>(() => ExoPowerShellService.InvokeInteractiveConnection(powershell, false));
+        Assert.Equal(1, runspace.SessionStateProxy.GetVariable("attempts"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExchangePipelineCancellationAndTimeoutStopActiveWork(bool timeout)
+    {
+        using var runspace = CreateRunspace("""
+            function Invoke-BlockedQuery { [CmdletBinding()] param()
+                [void]$global:QueryStarted.TrySetResult($true)
+                while ($true) { [Threading.Thread]::SpinWait(1000) }
+            }
+            """);
+        var started = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        runspace.SessionStateProxy.SetVariable("QueryStarted", started);
+        using var cancellation = new CancellationTokenSource();
+        using var powershell = PowerShell.Create();
+        powershell.Runspace = runspace;
+        powershell.AddCommand("Invoke-BlockedQuery");
+        var query = Task.Run(() => ExoPowerShellService.InvokePipelineCore(powershell, cancellation.Token,
+            timeout ? TimeSpan.FromMilliseconds(500) : TimeSpan.FromSeconds(10)));
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        if (timeout)
+            Assert.Contains("timed out", (await Assert.ThrowsAsync<TimeoutException>(async () => await query.WaitAsync(TimeSpan.FromSeconds(5)))).Message);
+        else
+        {
+            cancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await query.WaitAsync(TimeSpan.FromSeconds(5)));
+        }
+        powershell.Commands.Clear();
+        powershell.AddScript("'runspace reusable'");
+        Assert.Equal("runspace reusable", Assert.Single(ExoPowerShellService.InvokePipelineCore(powershell, default, TimeSpan.FromSeconds(5))).ToString());
+    }
+
     [Fact]
     public async Task MailboxBatchPreservesOtherResultsAfterLookupFailure()
     {
@@ -33,12 +108,17 @@ public sealed class WorkflowTests
     public async Task PermissionReportsPreserveArrayListGrantsAndUnresolvedSids()
     {
         using var runspace = CreateRunspace("""
-            function Get-EXOMailboxPermission { [CmdletBinding()] param($Identity,$ResultSize)
+            function Get-Recipient { [CmdletBinding()] param($Identity,$RecipientTypeDetails)
+                [pscustomobject]@{Identity='mailbox';PrimarySmtpAddress='mailbox@example.org';RecipientTypeDetails='SharedMailbox'}
+            }
+            function Get-EXOMailboxPermission { [CmdletBinding()] param($PrimarySmtpAddress,$ResultSize)
+                if ($PrimarySmtpAddress -ne 'mailbox@example.org') { throw 'Permission query must use resolved primary SMTP address' }
                 [pscustomobject]@{User='user@example.org';AccessRights=[Collections.ArrayList]@('FullAccess');Deny=$false;IsInherited=$false}
                 [pscustomobject]@{User='S-1-5-21-999';AccessRights=[Collections.ArrayList]@('FullAccess');Deny=$false;IsInherited=$false}
                 [pscustomobject]@{User='denied';AccessRights=[Collections.ArrayList]@('FullAccess');Deny=$true;IsInherited=$false}
             }
-            function Get-EXORecipientPermission { [CmdletBinding()] param($Identity,$ResultSize)
+            function Get-EXORecipientPermission { [CmdletBinding()] param($PrimarySmtpAddress,$ResultSize)
+                if ($PrimarySmtpAddress -ne 'mailbox@example.org') { throw 'Permission query must use resolved primary SMTP address' }
                 [pscustomobject]@{Trustee='user@example.org';AccessRights=[Collections.ArrayList]@('SendAs');AccessControlType='Allow';IsInherited=$false}
                 [pscustomobject]@{Trustee='inherited';AccessRights=[Collections.ArrayList]@('SendAs');AccessControlType='Allow';IsInherited=$true}
             }
@@ -48,6 +128,164 @@ public sealed class WorkflowTests
         {
             Assert.Equal(new[] { "user@example.org", "S-1-5-21-999" }, await exo.GetAllFullAccessDelegatesAsync("mailbox"));
             Assert.Equal(new[] { "user@example.org" }, await exo.GetAllSendAsDelegatesAsync("mailbox"));
+        }
+        finally { await exo.ShutdownAsync(); }
+    }
+
+    [Fact]
+    public void ReportCsvIncludesWarningDetails()
+    {
+        var row = new ReportRow
+        {
+            ObjectName = "mailbox", MemberOrDelegate = "deleted-delegate", RoleOrPermission = "Send on Behalf",
+            Status = "Unresolved: recipient \"deleted\", unavailable"
+        };
+        var lines = ReportingService.CreateCsvLines(new[] { row }).ToArray();
+        Assert.EndsWith(",Status", lines[0]);
+        Assert.Contains("deleted-delegate", lines[1]);
+        Assert.EndsWith(InputParsingHelpers.EscapeCsv(row.Status), lines[1]);
+        Assert.True(row.HasWarning);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PermissionReportsRejectOutOfScopeRows(bool sendAs)
+    {
+        using var runspace = CreateRunspace("""
+            function Get-Recipient { [CmdletBinding()] param($Identity,$RecipientTypeDetails)
+                [pscustomobject]@{Identity='target';PrimarySmtpAddress='target@example.org';RecipientTypeDetails='SharedMailbox'}
+            }
+            function Get-EXOMailboxPermission { [CmdletBinding()] param($PrimarySmtpAddress,$ResultSize)
+                [pscustomobject]@{Identity='other@example.org';User='delegate@example.org';AccessRights=[Collections.ArrayList]@('FullAccess')}
+            }
+            function Get-EXORecipientPermission { [CmdletBinding()] param($PrimarySmtpAddress,$ResultSize)
+                [pscustomobject]@{Identity='other@example.org';Trustee='delegate@example.org';AccessRights=[Collections.ArrayList]@('SendAs')}
+            }
+            """);
+        var exo = new ExoPowerShellService(runspace);
+        try
+        {
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => sendAs
+                ? exo.GetAllSendAsDelegatesAsync("target") : exo.GetAllFullAccessDelegatesAsync("target"));
+            Assert.Contains("no out-of-scope rows were included", error.Message);
+        }
+        finally { await exo.ShutdownAsync(); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReportCancellationCannotReturnSuccessAndAllowsAnotherQuery(bool cancelBeforeStart)
+    {
+        using var runspace = CreateRunspace("""
+            function Get-Recipient { [CmdletBinding()] param($Identity,$RecipientTypeDetails)
+                if ($global:BlockQuery) {
+                    [void]$global:QueryStarted.TrySetResult($true)
+                    while ($true) { [Threading.Thread]::SpinWait(1000) }
+                }
+                [pscustomobject]@{PrimarySmtpAddress='target@example.org';RecipientTypeDetails='SharedMailbox'}
+            }
+            function Get-EXOMailboxPermission { [CmdletBinding()] param($PrimarySmtpAddress,$ResultSize)
+                [pscustomobject]@{Identity=$PrimarySmtpAddress;User='delegate@example.org';AccessRights=[Collections.ArrayList]@('FullAccess')}
+            }
+            """);
+        var started = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        runspace.SessionStateProxy.SetVariable("QueryStarted", started);
+        runspace.SessionStateProxy.SetVariable("BlockQuery", true);
+        using var cancellation = new CancellationTokenSource();
+        var exo = new ExoPowerShellService(runspace) { OperationCancellationToken = cancellation.Token };
+        try
+        {
+            if (cancelBeforeStart) cancellation.Cancel();
+            var query = exo.GetAllFullAccessDelegatesAsync("target");
+            if (!cancelBeforeStart)
+            {
+                await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                cancellation.Cancel();
+            }
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await query.WaitAsync(TimeSpan.FromSeconds(5)));
+            if (cancelBeforeStart) Assert.False(started.Task.IsCompleted);
+            exo.OperationCancellationToken = default;
+            runspace.SessionStateProxy.SetVariable("BlockQuery", false);
+            Assert.Single(await exo.GetAllFullAccessDelegatesAsync("target"));
+        }
+        finally { exo.OperationCancellationToken = default; await exo.ShutdownAsync(); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MailboxReportPreservesReadableSectionsAndUnresolvedDelegates(bool denySendAs)
+    {
+        using var runspace = CreateRunspace("""
+            function Get-Recipient { [CmdletBinding()] param($Identity,$RecipientTypeDetails)
+                if ($Identity -eq 'deleted-delegate') { return }
+                [pscustomobject]@{Identity=$Identity;Name=$Identity;PrimarySmtpAddress=$Identity;RecipientTypeDetails='SharedMailbox'}
+            }
+            function Get-Mailbox { [CmdletBinding()] param($Identity)
+                [pscustomobject]@{GrantSendOnBehalfTo=[Collections.ArrayList]@('deleted-delegate','known@example.org')}
+            }
+            function Get-EXOMailboxPermission { [CmdletBinding()] param($PrimarySmtpAddress,$ResultSize)
+                [pscustomobject]@{User='full@example.org';AccessRights=[Collections.ArrayList]@('FullAccess')}
+            }
+            function Get-EXORecipientPermission { [CmdletBinding()] param($PrimarySmtpAddress,$ResultSize)
+                if ($global:DenySendAs) { throw 'Send As access denied' }
+                [pscustomobject]@{Trustee='send@example.org';AccessRights=[Collections.ArrayList]@('SendAs')}
+            }
+            """);
+        runspace.SessionStateProxy.SetVariable("DenySendAs", denySendAs);
+        var exo = new ExoPowerShellService(runspace);
+        try
+        {
+            var rows = await new ReportingService(exo).GetMailboxDelegatesAsync("mailbox@example.org");
+            Assert.Contains(rows, row => row.MemberOrDelegate == "full@example.org" && !row.HasWarning);
+            Assert.Contains(rows, row => row.MemberOrDelegate == "known@example.org" && !row.HasWarning);
+            Assert.Contains(rows, row => row.MemberOrDelegate == "deleted-delegate" && row.HasWarning);
+            Assert.Equal(denySendAs, rows.Single(row => row.RoleOrPermission == "Send As").HasWarning);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => exo.GetAllSendOnBehalfDelegatesAsync("mailbox@example.org"));
+        }
+        finally { await exo.ShutdownAsync(); }
+    }
+
+    [Fact]
+    public async Task PermissionReportsRejectUnresolvedTargetsBeforeQuery()
+    {
+        using var runspace = CreateRunspace("""
+            function Get-Recipient { [CmdletBinding()] param($Identity,$RecipientTypeDetails) }
+            function Get-EXOMailboxPermission { throw 'Unscoped query must not execute' }
+            function Get-EXORecipientPermission { throw 'Unscoped query must not execute' }
+            """);
+        var exo = new ExoPowerShellService(runspace);
+        try
+        {
+            Assert.Contains("No permission query was run", (await Assert.ThrowsAsync<InvalidOperationException>(() => exo.GetAllFullAccessDelegatesAsync("missing"))).Message);
+            Assert.Contains("No permission query was run", (await Assert.ThrowsAsync<InvalidOperationException>(() => exo.GetAllSendAsDelegatesAsync("missing"))).Message);
+        }
+        finally { await exo.ShutdownAsync(); }
+    }
+
+    [Fact]
+    public async Task DistributionGroupReportPreservesMembersWhenOwnerIsUnresolved()
+    {
+        using var runspace = CreateRunspace("""
+            function Get-Recipient { [CmdletBinding()] param($Identity,$RecipientTypeDetails)
+                if ($Identity -eq 'deleted-owner') { return }
+                [pscustomobject]@{Identity='group';PrimarySmtpAddress='group@example.org';RecipientTypeDetails='MailUniversalDistributionGroup'}
+            }
+            function Get-DistributionGroup { [CmdletBinding()] param($Identity)
+                [pscustomobject]@{ManagedBy=[Collections.ArrayList]@('deleted-owner')}
+            }
+            function Get-DistributionGroupMember { [CmdletBinding()] param($Identity,$ResultSize)
+                [pscustomobject]@{DisplayName='Member';PrimarySmtpAddress='member@example.org'}
+            }
+            """);
+        var exo = new ExoPowerShellService(runspace);
+        try
+        {
+            var rows = await new ReportingService(exo).GenerateObjectReportAsync("group");
+            Assert.Contains(rows, row => row.MemberOrDelegate == "deleted-owner" && row.HasWarning);
+            Assert.Contains(rows, row => row.RoleOrPermission == "Member" && !row.HasWarning);
         }
         finally { await exo.ShutdownAsync(); }
     }
@@ -206,6 +444,32 @@ public sealed class WorkflowTests
     }
 
     [Fact]
+    public async Task GroupSettingsSaveFailuresExposeActionableErrors()
+    {
+        using var runspace = CreateRunspace("""
+            function Get-Recipient { [CmdletBinding()] param($Identity,$RecipientTypeDetails)
+                [pscustomobject]@{PrimarySmtpAddress=$Identity;RecipientTypeDetails='MailUniversalDistributionGroup'}
+            }
+            """);
+        var exo = new ExoPowerShellService(runspace);
+        try
+        {
+            var service = new GroupSettingsService(exo);
+            Assert.False(await service.SaveDeliveryManagementAsync("group", false, Array.Empty<string>()));
+            Assert.Contains("Load the group's settings", service.LastError);
+            Assert.False(await service.SaveDelegatesAsync("group", Array.Empty<string>(), Array.Empty<string>()));
+            Assert.Contains("Load the group's settings", service.LastError);
+            Assert.False(await service.SaveMessageApprovalAsync("group", false, Array.Empty<string>(), Array.Empty<string>(), "Always"));
+            Assert.Contains("Load the group's settings", service.LastError);
+            Assert.False(await service.SaveMembershipApprovalAsync("group", "Closed", "Closed"));
+            Assert.Contains("Load the group's settings", service.LastError);
+            Assert.False(await service.SaveMessageApprovalAsync("group", true, Array.Empty<string>(), Array.Empty<string>(), "Always"));
+            Assert.Contains("moderator is required", service.LastError);
+        }
+        finally { await exo.ShutdownAsync(); }
+    }
+
+    [Fact]
     public async Task GroupSettingsRoundTripPreservesListsAndSnapshotsRemovals()
     {
         var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
@@ -237,6 +501,7 @@ public sealed class WorkflowTests
             Assert.Single(loaded.BypassModerationSenders);
             runspace.SessionStateProxy.SetVariable("Delegates", new System.Collections.ArrayList { "second@example.org", "first@example.org" });
             Assert.True(await service.SaveDeliveryManagementAsync("group", false, loaded.SpecifiedSenders));
+            Assert.Null(service.LastError);
             Assert.True(await service.SaveDelegatesAsync("group", loaded.SendAsDelegates, loaded.SendOnBehalfDelegates));
             Assert.Empty(snapshots.ListSnapshots());
             Assert.True(await service.SaveDelegatesAsync("group", Array.Empty<string>(), new[] { "first@example.org" }));

@@ -101,7 +101,13 @@ namespace EXOKit
             LoadSettingsIntoUi();
 
             Logger.LogEntryWritten += OnLogEntryWritten;
-            TextBoxGroupSettingsIdentity.TextChanged += (_, _) => _loadedGroupSettingsIdentity = null;
+            TextBoxGroupSettingsIdentity.TextChanged += (_, _) =>
+            {
+                _loadedGroupSettingsIdentity = null;
+                SetGroupSettingsStatus("Settings not loaded", "", InfoBarSeverity.Informational);
+                UpdateGroupSettingsControls();
+            };
+            UpdateGroupSettingsControls();
             if (configError != null)
             {
                 Logger.Log($"Configuration could not be loaded: {configError}. Correct and save Settings; the original file is preserved as config.json.bak on save.", LogType.Error);
@@ -142,10 +148,16 @@ namespace EXOKit
             _exo.OperationCancellationToken = _operationCancellation.Token;
             _authService.OperationCancellationToken = _operationCancellation.Token;
             ButtonCancelOperation.Visibility = Visibility.Visible;
+            ButtonCancelOperation.Content = "Cancel";
+            ButtonCancelOperation.IsEnabled = true;
             ShellOperationProgress.Visibility = Visibility.Visible;
             ShellOperationProgress.IsActive = true;
             SetOperationControlsEnabled(false);
-            try { await operation(); }
+            try
+            {
+                await operation();
+                _operationCancellation.Token.ThrowIfCancellationRequested();
+            }
             catch (OperationCanceledException)
             {
                 Logger.Log("Operation cancelled. Applied changes are not rolled back; review results and recovery snapshots before retrying.", LogType.Warning);
@@ -167,6 +179,7 @@ namespace EXOKit
                 ShellOperationProgress.Visibility = Visibility.Collapsed;
                 SetOperationControlsEnabled(true);
                 UpdateConnectionStatus();
+                UpdateGroupSettingsControls();
             }
         }
 
@@ -184,8 +197,10 @@ namespace EXOKit
 
         private void ButtonCancelOperation_Click(object sender, RoutedEventArgs args)
         {
+            ButtonCancelOperation.Content = "Cancelling...";
+            ButtonCancelOperation.IsEnabled = false;
             _operationCancellation?.Cancel();
-            Logger.Log("Cancellation requested. Waiting for the active service call to finish; applied changes will not be rolled back.", LogType.Warning);
+            Logger.Log("Cancellation requested. Stopping the active Exchange command; applied changes are not rolled back and must be verified before retrying.", LogType.Warning);
         }
 
         private void SetOperationControlsEnabled(bool enabled)
@@ -212,15 +227,11 @@ namespace EXOKit
                     DisableControls(VisualTreeHelper.GetChild(parent, index));
             }
 
-            DisableControls(OperationPanels);
+            DisableControls(OperationPanelHost);
             DisableControls(ConnectionControls);
             DisableControls(TextBoxServiceNowTicketNumber);
             foreach (var item in MainNavigationView.MenuItems.OfType<NavigationViewItem>()) DisableControls(item);
         }
-
-        private static readonly Regex DeviceCodeLineRegex = new(
-            @"^(?<prefix>\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]\s*)?To sign in, use a web browser to open the page (?<url>\S+) and enter the code (?<code>\S+) to authenticate\.$",
-            RegexOptions.Compiled);
 
         private void OnLogEntryWritten(string line, LogType type)
         {
@@ -271,46 +282,11 @@ namespace EXOKit
         private void AppendLogLine(string line, LogType type)
         {
             TextBlockLogCount.Text = (++_visibleLogEntries).ToString();
-            var match = DeviceCodeLineRegex.Match(line);
-            if (!match.Success)
+            TextBlockLog.Inlines.Add(new Run
             {
-                TextBlockLog.Inlines.Add(new Run
-                {
-                    Text = line + Environment.NewLine,
-                    Foreground = new SolidColorBrush(Logger.GetColorForType(type))
-                });
-            }
-            else
-            {
-                if (match.Groups["prefix"].Success)
-                {
-                    TextBlockLog.Inlines.Add(new Run { Text = match.Groups["prefix"].Value });
-                }
-
-                TextBlockLog.Inlines.Add(new Run { Text = "To sign in, use a web browser to open the page " });
-
-                var url = match.Groups["url"].Value;
-                var hyperlink = new Hyperlink
-                {
-                    NavigateUri = new Uri(url),
-                    Foreground = new SolidColorBrush(Microsoft.UI.Colors.LimeGreen)
-                };
-                hyperlink.Inlines.Add(new Run { Text = url });
-                TextBlockLog.Inlines.Add(hyperlink);
-
-                TextBlockLog.Inlines.Add(new Run { Text = " and enter the code " });
-
-                TextBlockLog.Inlines.Add(new Run
-                {
-                    Text = match.Groups["code"].Value,
-                    Foreground = new SolidColorBrush(Microsoft.UI.Colors.Yellow),
-                    FontWeight = Microsoft.UI.Text.FontWeights.Bold
-                });
-
-                TextBlockLog.Inlines.Add(new Run { Text = " to authenticate." + Environment.NewLine });
-
-                TryCopyDeviceCodeToClipboard(match.Groups["code"].Value);
-            }
+                Text = line + Environment.NewLine,
+                Foreground = new SolidColorBrush(Logger.GetColorForType(type))
+            });
 
             if (type == LogType.Ticket)
             {
@@ -323,35 +299,6 @@ namespace EXOKit
                 TicketNotesScrollViewer.UpdateLayout();
                 TicketNotesScrollViewer.ChangeView(null, TicketNotesScrollViewer.ScrollableHeight, null, true);
 
-            }
-        }
-
-        private string? _lastCopiedDeviceCode;
-
-        /// <summary>
-        /// Automatically copies a freshly detected device sign-in code to the clipboard, so the user can
-        /// immediately paste it into the browser tab opened via the "To sign in..." link without having
-        /// to manually select/copy the highlighted code text. Guards against re-copying the same code if
-        /// the log line is somehow processed more than once.
-        /// </summary>
-        private void TryCopyDeviceCodeToClipboard(string code)
-        {
-            if (string.IsNullOrWhiteSpace(code) || string.Equals(code, _lastCopiedDeviceCode, StringComparison.Ordinal))
-            {
-                return;
-            }
-
-            try
-            {
-                var dataPackage = new DataPackage();
-                dataPackage.SetText(code);
-                Clipboard.SetContent(dataPackage);
-                _lastCopiedDeviceCode = code;
-                Logger.Log($"Device code '{code}' copied to clipboard.", LogType.Success);
-            }
-            catch (Exception ex)
-            {
-                Logger.Log($"Could not copy device code to clipboard: {ex.Message}", LogType.Warning);
             }
         }
 
@@ -630,7 +577,8 @@ namespace EXOKit
         private async Task ConnectExoAsync()
         {
             ButtonConnectExo.IsEnabled = false;
-            await _exo.ConnectAsync(CheckBoxExoBrowserSignIn.IsChecked == true);
+            if (!await _exo.ConnectAsync(CheckBoxExoBrowserSignIn.IsChecked == true))
+                throw new InvalidOperationException(_exo.LastError ?? "Exchange Online connection failed. Review the output log.");
             UpdateConnectionStatus();
             await RefreshAcceptedDomainsAsync();
         }
@@ -655,6 +603,7 @@ namespace EXOKit
                 return;
             }
             var connected = await _authService.ConnectGraphAsync();
+            if (!connected) throw new InvalidOperationException(_authService.LastError ?? "Graph connection failed. Review the output log.");
             if (connected)
             {
                 try
@@ -923,12 +872,13 @@ namespace EXOKit
 
             ButtonLoadGroupSettings.IsEnabled = false;
             _loadedGroupSettingsIdentity = null;
+            SetGroupSettingsStatus("Loading settings", identity, InfoBarSeverity.Informational);
             try
             {
                 var snapshot = await _groupSettingsService.LoadSettingsAsync(identity);
                 if (snapshot == null)
                 {
-                    return;
+                    throw new InvalidOperationException(_groupSettingsService.LastError ?? "Group settings could not be read.");
                 }
 
                 RadioDeliveryInternalAndExternal.IsChecked = snapshot.AllowExternalSenders;
@@ -953,11 +903,63 @@ namespace EXOKit
                 if (string.Equals(identity, TextBoxGroupSettingsIdentity.Text.Trim(), StringComparison.OrdinalIgnoreCase))
                 {
                     _loadedGroupSettingsIdentity = identity;
+                    SetGroupSettingsStatus("Settings loaded", identity, InfoBarSeverity.Success);
                 }
+            }
+            catch (OperationCanceledException)
+            {
+                SetGroupSettingsStatus("Load cancelled", "No settings were changed.", InfoBarSeverity.Warning);
+                throw;
+            }
+            catch (Exception ex)
+            {
+                SetGroupSettingsStatus("Load failed", ex.Message, InfoBarSeverity.Error);
+                throw;
             }
             finally
             {
                 ButtonLoadGroupSettings.IsEnabled = true;
+            }
+        }
+
+        private void UpdateGroupSettingsControls()
+        {
+            var canSave = _exo.IsConnected && TryGetGroupSettingsIdentity(out _);
+            ButtonSaveDeliveryManagement.IsEnabled = canSave;
+            ButtonSaveDelegates.IsEnabled = canSave;
+            ButtonSaveMessageApproval.IsEnabled = canSave;
+            ButtonSaveMembershipApproval.IsEnabled = canSave;
+        }
+
+        private void SetGroupSettingsStatus(string title, string message, InfoBarSeverity severity)
+        {
+            GroupSettingsStatus.Title = title;
+            GroupSettingsStatus.Message = message;
+            GroupSettingsStatus.Severity = severity;
+        }
+
+        private async Task SaveGroupSettingsSectionAsync(string section, Func<Task<bool>> save)
+        {
+            SetGroupSettingsStatus($"Saving {section}", "Waiting for Exchange verification.", InfoBarSeverity.Informational);
+            try
+            {
+                if (!await save())
+                    throw new InvalidOperationException(_groupSettingsService.LastError ?? "Exchange could not confirm the save.");
+                _exo.OperationCancellationToken.ThrowIfCancellationRequested();
+                SetGroupSettingsStatus($"{section} saved", "The settings were read back and verified in Exchange.", InfoBarSeverity.Success);
+            }
+            catch (OperationCanceledException)
+            {
+                _loadedGroupSettingsIdentity = null;
+                SetGroupSettingsStatus("Save cancelled: reload required", "Some changes may already have been applied. Reload and review before retrying.", InfoBarSeverity.Warning);
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _loadedGroupSettingsIdentity = null;
+                var message = $"{section}: {ex.Message}\nSome changes may already have been applied. Reload and review settings before retrying.";
+                SetGroupSettingsStatus("Save failed: reload required", message, InfoBarSeverity.Error);
+                throw new InvalidOperationException(message, ex);
             }
         }
 
@@ -990,7 +992,7 @@ namespace EXOKit
             ButtonSaveDeliveryManagement.IsEnabled = false;
             try
             {
-                await _groupSettingsService.SaveDeliveryManagementAsync(identity, allowExternalSenders, specifiedSenders);
+                await SaveGroupSettingsSectionAsync("Delivery management", () => _groupSettingsService.SaveDeliveryManagementAsync(identity, allowExternalSenders, specifiedSenders));
             }
             finally
             {
@@ -1022,7 +1024,7 @@ namespace EXOKit
             ButtonSaveDelegates.IsEnabled = false;
             try
             {
-                await _groupSettingsService.SaveDelegatesAsync(identity, sendAsDelegates, sendOnBehalfDelegates);
+                await SaveGroupSettingsSectionAsync("Delegates", () => _groupSettingsService.SaveDelegatesAsync(identity, sendAsDelegates, sendOnBehalfDelegates));
             }
             finally
             {
@@ -1054,7 +1056,7 @@ namespace EXOKit
             ButtonSaveMessageApproval.IsEnabled = false;
             try
             {
-                await _groupSettingsService.SaveMessageApprovalAsync(identity, requireModeratorApproval, moderators, bypassSenders, notifySenderMode);
+                await SaveGroupSettingsSectionAsync("Message approval", () => _groupSettingsService.SaveMessageApprovalAsync(identity, requireModeratorApproval, moderators, bypassSenders, notifySenderMode));
             }
             finally
             {
@@ -1084,7 +1086,7 @@ namespace EXOKit
             ButtonSaveMembershipApproval.IsEnabled = false;
             try
             {
-                await _groupSettingsService.SaveMembershipApprovalAsync(identity, joinRestriction, departRestriction);
+                await SaveGroupSettingsSectionAsync("Membership approval", () => _groupSettingsService.SaveMembershipApprovalAsync(identity, joinRestriction, departRestriction));
             }
             finally
             {
@@ -1205,9 +1207,21 @@ namespace EXOKit
             // Any edit to the identity invalidates the previous Validate result, so the user can't
             // run a report against a stale/mismatched type confirmation.
             _validatedReportTarget = null;
+            _reportResults.Clear();
+            if (ButtonExportReportCsv == null) return;
+            ButtonExportReportCsv.IsEnabled = false;
             ButtonGenerateObjectReport.IsEnabled = false;
             ButtonGetMailboxDelegates.IsEnabled = false;
             TextBlockReportingValidation.Text = "Enter an identity and click Validate to confirm its type before running a report.";
+            if (ReportStatus != null) SetReportStatus("No report generated", "", InfoBarSeverity.Informational);
+        }
+
+        private void SetReportStatus(string title, string message, InfoBarSeverity severity)
+        {
+            ReportStatus.Title = title;
+            ReportStatus.Message = message;
+            ReportStatus.Severity = severity;
+            ReportStatus.IsOpen = true;
         }
 
         private async void ButtonValidateReportingIdentity_Click(object sender, RoutedEventArgs e)
@@ -1229,6 +1243,9 @@ namespace EXOKit
             }
 
             ButtonValidateReportingIdentity.IsEnabled = false;
+            _reportResults.Clear();
+            ButtonExportReportCsv.IsEnabled = false;
+            SetReportStatus("Validating", identity, InfoBarSeverity.Informational);
             ButtonGenerateObjectReport.IsEnabled = false;
             ButtonGetMailboxDelegates.IsEnabled = false;
             _validatedReportTarget = null;
@@ -1242,7 +1259,7 @@ namespace EXOKit
                 {
                     case ReportTargetKind.Group:
                         ButtonGenerateObjectReport.IsEnabled = true;
-                        TextBlockReportingValidation.Text = $"'{target.Name}' ({target.PrimarySmtpAddress}) is a {target.FriendlyType}. Use 'Generate Membership/Permissions Report'.";
+                        TextBlockReportingValidation.Text = $"'{target.Name}' ({target.PrimarySmtpAddress}) is a {target.FriendlyType}.";
                         break;
                     case ReportTargetKind.Mailbox:
                         ButtonGetMailboxDelegates.IsEnabled = true;
@@ -1255,10 +1272,18 @@ namespace EXOKit
                 }
 
                 Logger.Log($"Reporting validation: '{identity}' is a {target.FriendlyType}.", LogType.Success);
+                SetReportStatus(target.Kind == ReportTargetKind.Unsupported ? "Unsupported target" : "Ready to generate report", target.PrimarySmtpAddress, InfoBarSeverity.Informational);
+            }
+            catch (OperationCanceledException)
+            {
+                TextBlockReportingValidation.Text = "Validation cancelled.";
+                SetReportStatus("Validation cancelled", "No report generated.", InfoBarSeverity.Warning);
+                throw;
             }
             catch (Exception ex)
             {
                 TextBlockReportingValidation.Text = $"Validation failed: {ex.Message}";
+                SetReportStatus("Validation failed", ex.Message, InfoBarSeverity.Error);
                 Logger.Log($"Reporting validation failed for '{identity}': {ex.Message}", LogType.Error);
                 await ShowMessageAsync(ex.Message, "Validation Failed");
             }
@@ -1271,7 +1296,14 @@ namespace EXOKit
         private async void ButtonGenerateObjectReport_Click(object sender, RoutedEventArgs e)
             => await RunUiOperationAsync(GenerateObjectReportAsync);
 
-        private async Task GenerateObjectReportAsync()
+        private Task GenerateObjectReportAsync() => GenerateReportAsync(ReportTargetKind.Group);
+
+        private async void ButtonGetMailboxDelegates_Click(object sender, RoutedEventArgs e)
+            => await RunUiOperationAsync(GetMailboxDelegatesAsync);
+
+        private Task GetMailboxDelegatesAsync() => GenerateReportAsync(ReportTargetKind.Mailbox);
+
+        private async Task GenerateReportAsync(ReportTargetKind kind)
         {
             if (!_exo.IsConnected)
             {
@@ -1286,98 +1318,50 @@ namespace EXOKit
                 return;
             }
 
-            if (_validatedReportTarget == null || _validatedReportTarget.Kind != ReportTargetKind.Group)
+            if (_validatedReportTarget == null || _validatedReportTarget.Kind != kind)
             {
-                await ShowMessageAsync("Click Validate first to confirm this identity is a group or distribution list.", "Not Validated");
+                await ShowMessageAsync("Validate this identity before generating a report.", "Not Validated");
                 return;
             }
 
             ButtonGenerateObjectReport.IsEnabled = false;
             ButtonGetMailboxDelegates.IsEnabled = false;
             ButtonExportReportCsv.IsEnabled = false;
+            _reportResults.Clear();
+            SetReportStatus("Generating report", identity, InfoBarSeverity.Informational);
             try
             {
-                Logger.Log($"Resolving recipient '{identity}'...");
-                var rows = await _reportingService.GenerateObjectReportAsync(identity);
-                _reportResults.Clear();
+                Logger.Log($"Generating report for '{identity}'...");
+                var rows = kind == ReportTargetKind.Group
+                    ? await _reportingService.GenerateObjectReportAsync(identity)
+                    : await _reportingService.GetMailboxDelegatesAsync(identity);
+                _exo.OperationCancellationToken.ThrowIfCancellationRequested();
                 foreach (var row in rows)
                 {
                     _reportResults.Add(row);
                 }
 
-                if (rows.Count == 0)
-                {
-                    Logger.Log($"No members or permissions found for '{identity}'.", LogType.Warning);
-                }
-                else
-                {
-                    Logger.Log($"Report complete: {rows.Count} row(s) for '{identity}'.", LogType.Success);
-                    ButtonExportReportCsv.IsEnabled = true;
-                }
+                var warnings = rows.Count(row => row.HasWarning);
+                var title = warnings > 0 ? "Partial report" : rows.Count == 0 ? "Report complete: no entries" : "Report complete";
+                var message = warnings > 0
+                    ? $"{identity}: {rows.Count - warnings} readable entries; {warnings} unresolved entries or unavailable sections. Status details are included in CSV exports."
+                    : $"{identity}: {rows.Count} entries found.";
+                SetReportStatus(title, message, warnings > 0 ? InfoBarSeverity.Warning : InfoBarSeverity.Success);
+                Logger.Log($"{title}. {message}", warnings > 0 ? LogType.Warning : LogType.Success);
+                ButtonExportReportCsv.IsEnabled = rows.Count > 0;
+            }
+            catch (OperationCanceledException)
+            {
+                _reportResults.Clear();
+                SetReportStatus("Report cancelled", "No report was published or exported.", InfoBarSeverity.Warning);
+                throw;
             }
             catch (Exception ex)
             {
+                _reportResults.Clear();
+                SetReportStatus("Report failed", ex.Message, InfoBarSeverity.Error);
                 Logger.Log($"Report generation failed for '{identity}': {ex.Message}", LogType.Error);
                 await ShowMessageAsync(ex.Message, "Report Generation Failed");
-            }
-            finally
-            {
-                ButtonGenerateObjectReport.IsEnabled = _validatedReportTarget?.Kind == ReportTargetKind.Group;
-                ButtonGetMailboxDelegates.IsEnabled = _validatedReportTarget?.Kind == ReportTargetKind.Mailbox;
-            }
-        }
-
-        private async void ButtonGetMailboxDelegates_Click(object sender, RoutedEventArgs e)
-            => await RunUiOperationAsync(GetMailboxDelegatesAsync);
-
-        private async Task GetMailboxDelegatesAsync()
-        {
-            if (!_exo.IsConnected)
-            {
-                await ShowMessageAsync("Connect to EXO first.", "EXO Not Connected");
-                return;
-            }
-
-            var identity = TextBoxReportingIdentity.Text.Trim();
-            if (string.IsNullOrEmpty(identity))
-            {
-                await ShowMessageAsync("Enter the mailbox or resource email address.", "Input Missing");
-                return;
-            }
-
-            if (_validatedReportTarget == null || _validatedReportTarget.Kind != ReportTargetKind.Mailbox)
-            {
-                await ShowMessageAsync("Click Validate first to confirm this identity is a mailbox.", "Not Validated");
-                return;
-            }
-
-            ButtonGenerateObjectReport.IsEnabled = false;
-            ButtonGetMailboxDelegates.IsEnabled = false;
-            ButtonExportReportCsv.IsEnabled = false;
-            try
-            {
-                Logger.Log($"Getting delegates for '{identity}'...");
-                var rows = await _reportingService.GetMailboxDelegatesAsync(identity);
-                _reportResults.Clear();
-                foreach (var row in rows)
-                {
-                    _reportResults.Add(row);
-                }
-
-                if (rows.Count == 0)
-                {
-                    Logger.Log($"No delegates found for '{identity}'.", LogType.Warning);
-                }
-                else
-                {
-                    Logger.Log($"Delegate report complete: {rows.Count} row(s) for '{identity}'.", LogType.Success);
-                    ButtonExportReportCsv.IsEnabled = true;
-                }
-            }
-            catch (Exception ex)
-            {
-                Logger.Log($"Delegate lookup failed for '{identity}': {ex.Message}", LogType.Error);
-                await ShowMessageAsync(ex.Message, "Delegate Lookup Failed");
             }
             finally
             {
@@ -1400,7 +1384,7 @@ namespace EXOKit
             InitializeWithWindow.Initialize(savePicker, GetWindowHandle());
             savePicker.SuggestedStartLocation = PickerLocationId.DocumentsLibrary;
             savePicker.FileTypeChoices.Add("CSV File", new List<string> { ".csv" });
-            savePicker.SuggestedFileName = $"EXOKit_Report_{DateTime.Now:yyyyMMdd_HHmmss}";
+            savePicker.SuggestedFileName = $"EXOKit_{(_reportResults.Any(row => row.HasWarning) ? "Partial_" : "")}Report_{DateTime.Now:yyyyMMdd_HHmmss}";
 
             var file = await savePicker.PickSaveFileAsync();
             if (file == null)
@@ -1410,16 +1394,17 @@ namespace EXOKit
 
             try
             {
-                var lines = new List<string> { "ObjectName,ObjectPrimarySmtpAddress,ObjectType,MemberOrDelegate,RoleOrPermission" };
-                lines.AddRange(_reportResults.Select(r => string.Join(",",
-                    CsvEscape(r.ObjectName), CsvEscape(r.ObjectPrimarySmtpAddress), CsvEscape(r.ObjectType), CsvEscape(r.MemberOrDelegate), CsvEscape(r.RoleOrPermission))));
-
+                var lines = ReportingService.CreateCsvLines(_reportResults);
                 await FileIO.WriteLinesAsync(file, lines);
                 Logger.Log($"Report exported to '{file.Path}'.", LogType.Success);
+                SetReportStatus(_reportResults.Any(row => row.HasWarning) ? "Partial report exported" : "Report exported", file.Path,
+                    _reportResults.Any(row => row.HasWarning) ? InfoBarSeverity.Warning : InfoBarSeverity.Success);
             }
             catch (Exception ex)
             {
                 Logger.Log($"Failed to export report: {ex.Message}", LogType.Error);
+                SetReportStatus("Export failed", ex.Message, InfoBarSeverity.Error);
+                throw;
             }
         }
 

@@ -35,6 +35,14 @@ namespace EXOKit
         public App()
         {
             InitializeComponent();
+            UnhandledException += (_, eventArgs) => Services.ErrorReporter.Report("Unexpected application error", eventArgs.Exception, true);
+            AppDomain.CurrentDomain.UnhandledException += (_, eventArgs) =>
+                Services.ErrorReporter.Report("Fatal application error", eventArgs.ExceptionObject as Exception ?? new Exception("Unknown runtime failure."), true);
+            System.Threading.Tasks.TaskScheduler.UnobservedTaskException += (_, eventArgs) =>
+            {
+                Services.ErrorReporter.Report("Background operation failed", eventArgs.Exception);
+                eventArgs.SetObserved();
+            };
         }
 
         /// <summary>
@@ -43,8 +51,16 @@ namespace EXOKit
         /// <param name="args">Details about the launch request and process.</param>
         protected override void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
         {
-            _window = new MainWindow();
-            _window.Activate();
+            try
+            {
+                _window = new MainWindow();
+                _window.Activate();
+            }
+            catch (Exception exception)
+            {
+                Services.ErrorReporter.Report("Application startup failed", exception, true);
+                Exit();
+            }
         }
     }
 }

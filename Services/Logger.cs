@@ -35,6 +35,7 @@ namespace EXOKit.Services
         private static readonly List<string> _rawLines = new();
         private static readonly List<(string Line, LogType Type)> _history = new();
         private static readonly object _lock = new();
+        public static string LogPath => System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "EXOKit", "Logs", $"{DateTime.Now:yyyy-MM-dd}.log");
 
         public static void Log(string message, LogType type = LogType.Info)
         {
@@ -45,9 +46,20 @@ namespace EXOKit.Services
             {
                 _rawLines.Add(line);
                 _history.Add((line, type));
+                try
+                {
+                    System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(LogPath)!);
+                    System.IO.File.AppendAllText(LogPath, line + Environment.NewLine);
+                }
+                catch { }
             }
 
-            LogEntryWritten?.Invoke(line, type);
+            var handlers = LogEntryWritten;
+            if (handlers == null) return;
+            foreach (Action<string, LogType> handler in handlers.GetInvocationList())
+            {
+                try { handler(line, type); } catch { }
+            }
         }
 
         /// <summary>

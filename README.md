@@ -93,6 +93,18 @@ Configure these values in Settings:
 
 ## Requirements
 
+### Authentication and Diagnostics
+
+Graph uses system-browser MSAL authentication with the configured app registration and its `http://localhost` desktop redirect. EXO keeps its interactive sign-in and retries once in the browser only for WAM/window-handle failures. The existing browser-sign-in setting also selects that compatibility path directly. No device-code sign-in or fallback is used. Graph and EXO must use the configured tenant; independent consent or MFA prompts are possible.
+
+Before EXO sign-in, the embedded PowerShell 7.6.6 host checks stable PSGallery versions and installs missing or newer PackageManagement, PowerShellGet, and ExchangeOnlineManagement modules under CurrentUser. Install PowerShell 7.6+ if PSResourceGet 1.2+ is unavailable. An older loaded module requires restarting the app. Repository URL validation and normal PowerShell authorization remain enabled; publisher decisions require explicit user input. An offline update check can use suitable installed modules.
+
+Connection failures show a dialog with the service error. Unexpected managed startup/UI/background failures are reported, with diagnostic logs under `%LOCALAPPDATA%\EXOKit\Logs`. Fatal errors are not marked handled to keep an unknown application state running. Applied changes are not automatically rolled back.
+
+Local validation covers service regressions and an x64 application build. Live MFA, Conditional Access, tenant consent, Key Vault access, and admin workflows still require operator testing with the newly built application. No release/package version was changed.
+
+References: [EXO prerequisites](https://learn.microsoft.com/powershell/exchange/exchange-online-powershell-v2), [WAM compatibility](https://learn.microsoft.com/troubleshoot/exchange/administration/wam-integration-issues), [MSAL browser configuration](https://learn.microsoft.com/entra/msal/dotnet/acquiring-tokens/using-web-browsers).
+
 - Windows desktop; the release workflow builds x64. Local validation covers x64 only.
 - ExchangeOnlineManagement 3.10.1 or later installed where the embedded PowerShell can discover it.
   The app embeds PowerShell 7.6.6 on .NET 10 and Windows App SDK 2.4.0. Module security checks remain enabled.
@@ -151,9 +163,10 @@ Use a compatible policy and verify effective licensing separately. These reads r
 ## Operation Safety
 
 Only one service operation runs at a time. Disconnect and Settings are disabled during work, and
-window closure is blocked. Cancel Remaining Work stops between service calls; an active Exchange
-cmdlet is allowed to return. Cancellation does not roll back completed mutations. Reads can lag
-behind writes, so unconfirmed results require manual verification before retrying or closing a ticket.
+window closure is blocked. Cancel requests an asynchronous stop of the active Exchange command
+and prevents remaining calls. The button shows "Cancelling..." until cleanup finishes. Each embedded
+Exchange command has a five-minute timeout. Cancellation and timeouts do not roll back completed
+mutations; reload and verify unconfirmed results before retrying or closing a ticket.
 
 Permission and role removals capture a durable, tenant-bound before-state snapshot under
 `%LOCALAPPDATA%\EXOKit\Snapshots` before mutation. A failed snapshot write blocks that removal.
@@ -168,6 +181,9 @@ Group Settings must be loaded for the exact identity before saving. Recipient li
 to SMTP addresses, stale loaded state is rejected, and saved values are read back. EXO does not offer
 an atomic compare-and-set for these settings; avoid concurrent administration of the same group.
 Mail-enabled security group joining/leaving is owner-managed (Closed).
+The Group Settings banner confirms when a save has been read back and verified. Save failures show
+the service error in a dialog. After failure or cancellation, saving is disabled until settings are
+reloaded; some changes may already have reached Exchange.
 
 Starting in v1.0.33, PowerShell collections are read without assuming a generic collection type.
 Missing or malformed settings cannot silently become empty lists. Group Settings comparisons
@@ -179,7 +195,15 @@ finds no match. Graph user input accepts UPN, primary email, SMTP proxy address,
 rejects ambiguous matches. Send As checks read the full ACL and compare canonical identities and
 available current/historical SIDs. An unresolved trustee blocks a claim of absence; resolve the
 ACL/SID history manually before retrying. Reports retain unresolved SID grants instead of hiding
-them, and failed owner lookups fail the report rather than producing an apparently complete list.
+them. Unresolved group owners and Send-on-Behalf delegates appear with their original identities
+and an "Unresolved" status. An unreadable mailbox permission section gets an "Unavailable" row;
+readable sections remain in the report. These report-only fallbacks do not relax mutation checks.
+
+Mailbox permission reports resolve the target's primary SMTP address before querying and reject
+returned identities outside that recipient's known identifiers. Changing or validating a target,
+or starting another report, clears the previous results and disables export. The report banner
+distinguishes complete, empty, partial, failed, and cancelled results. Partial CSV exports have
+"Partial" in the suggested filename and include the same Status details as the table.
 
 CSV imports in every section use the recognized identity-column rules described above. Arbitrary
 multi-column files without a recognized identity header are rejected. Exports quote carriage
@@ -201,7 +225,7 @@ results do not qualify for closure.
 
 ## Version and Updates
 
-The title bar and Settings show the installed MSIX version, currently `v1.0.33`; unpackaged builds
+The title bar and Settings show the installed MSIX version, currently `v1.0.34`; unpackaged builds
 use the assembly version. Release tags must use `vMajor.Minor.Build`. The workflow stamps that
 version into the manifest and assembly while retaining the existing package name and publisher.
 Use a version higher than the installed version for an update.
@@ -269,11 +293,18 @@ configuration preservation, and ServiceNow request validation. Mock runspaces ex
 EXO service and Group Settings/mailbox orchestration, including unchanged list round trips and
 snapshot-before-removal failures. HTTP handlers exercise actual Graph SDK identity requests and
 prove cancellation after a ticket lookup prevents its closure PATCH. They do not mutate a live tenant.
+Reporting tests cover explicit SMTP scoping, unexpected mailbox identities, unresolved delegates,
+partial permission sections, and CSV warning details. Cancellation tests stop running pipelines,
+exercise command timeouts, and verify runspace reuse. WinUI layout and real Exchange response shapes
+still require an interactive test before release.
 NuGet advisories fail restore. Before production rollout, test EXO/Graph sign-in, one reversible
 permission change and restore, ServiceNow closure, and signed feed enrollment in a test tenant.
 
 ## Microsoft References
 
+- [Full Access report parameters](https://learn.microsoft.com/powershell/module/exchangepowershell/get-exomailboxpermission)
+- [Send As report parameters](https://learn.microsoft.com/powershell/module/exchangepowershell/get-exorecipientpermission)
+- [Asynchronous PowerShell stop](https://learn.microsoft.com/dotnet/api/system.management.automation.powershell.stopasync)
 - [Interactive EXO sign-in](https://learn.microsoft.com/powershell/exchange/connect-to-exchange-online-powershell#connect-to-exchange-online-powershell-with-an-interactive-sign-in-prompt)
 - [WAM compatibility guidance](https://learn.microsoft.com/troubleshoot/exchange/administration/wam-integration-issues)
 - [EXO module compatibility](https://learn.microsoft.com/powershell/exchange/exchange-online-powershell-v2)

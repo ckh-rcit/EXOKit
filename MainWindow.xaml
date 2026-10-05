@@ -135,7 +135,8 @@
                     </Grid>
                 </Border>
 
-                <Grid x:Name="OperationPanels" Grid.Row="1">
+                <ContentControl x:Name="OperationPanelHost" Grid.Row="1" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch">
+                <Grid x:Name="OperationPanels">
                 <!-- Mailboxes -->
                 <ScrollViewer x:Name="PanelMailboxes" Visibility="Visible">
                     <Grid ColumnSpacing="24" Padding="4">
@@ -363,6 +364,7 @@
                             <TextBox x:Name="TextBoxGroupSettingsIdentity" Width="420" HorizontalAlignment="Left" />
                             <Button x:Name="ButtonLoadGroupSettings" Content="Load Settings" Click="ButtonLoadGroupSettings_Click" />
                         </StackPanel>
+                        <InfoBar x:Name="GroupSettingsStatus" IsOpen="True" IsClosable="False" Severity="Informational" Title="Settings not loaded" />
 
                         <!-- Delivery management -->
                         <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="4" Padding="12">
@@ -516,17 +518,23 @@
                     </Grid.RowDefinitions>
                     <StackPanel Grid.Row="0" Spacing="8" Padding="8">
                         <TextBlock Text="Group / Distribution List / Mailbox Identity" />
-                        <TextBox x:Name="TextBoxReportingIdentity" Width="420" HorizontalAlignment="Left" TextChanged="TextBoxReportingIdentity_TextChanged" />
-                        <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBox x:Name="TextBoxReportingIdentity" MaxWidth="420" HorizontalAlignment="Stretch" TextChanged="TextBoxReportingIdentity_TextChanged" />
+                        <VariableSizedWrapGrid Orientation="Horizontal" ItemHeight="40" ItemWidth="210">
                             <Button x:Name="ButtonValidateReportingIdentity" Content="Validate" Click="ButtonValidateReportingIdentity_Click" />
-                            <Button x:Name="ButtonGenerateObjectReport" Content="Generate Membership/Permissions Report" Click="ButtonGenerateObjectReport_Click" IsEnabled="False" />
+                            <Button x:Name="ButtonGenerateObjectReport" Content="Get Group Report" Click="ButtonGenerateObjectReport_Click" IsEnabled="False" />
                             <Button x:Name="ButtonGetMailboxDelegates" Content="Get Mailbox Delegates" Click="ButtonGetMailboxDelegates_Click" IsEnabled="False" />
                             <Button x:Name="ButtonExportReportCsv" Content="Export to CSV..." Click="ButtonExportReportCsv_Click" IsEnabled="False" />
-                        </StackPanel>
+                        </VariableSizedWrapGrid>
                         <TextBlock x:Name="TextBlockReportingValidation" Opacity="0.7" TextWrapping="Wrap" Text="Enter an identity and click Validate to confirm its type before running a report." />
+                        <InfoBar x:Name="ReportStatus" IsOpen="True" IsClosable="False" Severity="Informational" Title="No report generated" />
                     </StackPanel>
                     <Border Grid.Row="1" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="4" Margin="8,0,8,8">
                         <ListView x:Name="ListViewReportResults" SelectionMode="None">
+                            <ListView.ItemContainerStyle>
+                                <Style TargetType="ListViewItem">
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                </Style>
+                            </ListView.ItemContainerStyle>
                             <ListView.HeaderTemplate>
                                 <DataTemplate>
                                     <Grid Padding="8,4">
@@ -535,11 +543,13 @@
                                             <ColumnDefinition Width="1*" />
                                             <ColumnDefinition Width="2*" />
                                             <ColumnDefinition Width="1.2*" />
+                                            <ColumnDefinition Width="2*" />
                                         </Grid.ColumnDefinitions>
                                         <TextBlock Grid.Column="0" Text="Object" FontWeight="SemiBold" />
                                         <TextBlock Grid.Column="1" Text="Type" FontWeight="SemiBold" />
                                         <TextBlock Grid.Column="2" Text="Member / Delegate" FontWeight="SemiBold" />
                                         <TextBlock Grid.Column="3" Text="Role / Permission" FontWeight="SemiBold" />
+                                        <TextBlock Grid.Column="4" Text="Status" FontWeight="SemiBold" />
                                     </Grid>
                                 </DataTemplate>
                             </ListView.HeaderTemplate>
@@ -551,11 +561,13 @@
                                             <ColumnDefinition Width="1*" />
                                             <ColumnDefinition Width="2*" />
                                             <ColumnDefinition Width="1.2*" />
+                                            <ColumnDefinition Width="2*" />
                                         </Grid.ColumnDefinitions>
-                                        <TextBlock Grid.Column="0" Text="{x:Bind ObjectName}" />
-                                        <TextBlock Grid.Column="1" Text="{x:Bind ObjectType}" />
-                                        <TextBlock Grid.Column="2" Text="{x:Bind MemberOrDelegate}" />
-                                        <TextBlock Grid.Column="3" Text="{x:Bind RoleOrPermission}" />
+                                        <TextBlock Grid.Column="0" Text="{x:Bind ObjectName}" TextWrapping="Wrap" Margin="0,0,8,0" />
+                                        <TextBlock Grid.Column="1" Text="{x:Bind ObjectType}" TextWrapping="Wrap" Margin="0,0,8,0" />
+                                        <TextBlock Grid.Column="2" Text="{x:Bind MemberOrDelegate}" TextWrapping="Wrap" Margin="0,0,8,0" />
+                                        <TextBlock Grid.Column="3" Text="{x:Bind RoleOrPermission}" TextWrapping="Wrap" Margin="0,0,8,0" />
+                                        <TextBlock Grid.Column="4" Text="{x:Bind Status}" TextWrapping="Wrap" />
                                     </Grid>
                                 </DataTemplate>
                             </ListView.ItemTemplate>
@@ -681,6 +693,7 @@
                     </StackPanel>
                 </ScrollViewer>
                 </Grid>
+                </ContentControl>
 
                 <!-- Output: Log / Ticket Notes -->
                 <Grid Grid.Row="2" Margin="0,12,0,0">

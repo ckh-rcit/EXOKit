@@ -17,6 +17,7 @@ namespace EXOKit.Services
         public string? Alias { get; set; }
         public string? DistinguishedName { get; set; }
         public string? Guid { get; set; }
+        public string? ExternalDirectoryObjectId { get; set; }
         public string? PrimarySmtpAddress { get; set; }
         public string? UserPrincipalName { get; set; }
         public string? Identity { get; set; }
@@ -24,7 +25,7 @@ namespace EXOKit.Services
         public string? RecipientType { get; set; }
 
         public IEnumerable<string> Keys(string requestedIdentity) =>
-            new[] { requestedIdentity, Name, Alias, DistinguishedName, Guid, PrimarySmtpAddress, UserPrincipalName, Identity }
+            new[] { requestedIdentity, Name, Alias, DistinguishedName, Guid, ExternalDirectoryObjectId, PrimarySmtpAddress, UserPrincipalName, Identity }
                 .Where(v => !string.IsNullOrEmpty(v))
                 .Select(v => v!);
     }
@@ -72,7 +73,9 @@ namespace EXOKit.Services
         private static bool _consoleAllocated;
 
         public bool IsConnected { get; private set; }
+        public string? LastError { get; private set; }
         public CancellationToken OperationCancellationToken { get; set; }
+        internal TimeSpan CommandTimeout { get; set; } = TimeSpan.FromMinutes(5);
         public string? ConnectedUserPrincipalName { get; private set; }
         public string? ConnectedTenantId { get; private set; }
         public Func<string, string, System.Collections.ObjectModel.Collection<System.Management.Automation.Host.ChoiceDescription>, int, int>? PromptForChoice { get; set; }
@@ -85,6 +88,7 @@ namespace EXOKit.Services
         {
             try
             {
+                LastError = null;
                 Logger.Log(useBrowserSignIn
                     ? "Connecting to Exchange Online using browser sign-in (WAM compatibility mode)..."
                     : "Connecting to Exchange Online using interactive Microsoft sign-in...");
@@ -94,29 +98,20 @@ namespace EXOKit.Services
                 using (var ps = PowerShell.Create())
                 {
                     ps.Runspace = _runspace;
-                    ps.AddCommand("Import-Module")
-                      .AddParameter("Name", "ExchangeOnlineManagement")
-                      .AddParameter("MinimumVersion", new Version(3, 10, 1))
-                      .AddParameter("ErrorAction", "Stop");
-                    ps.Invoke();
+                                        ps.AddScript(PowerShellPrerequisites.Script);
+                    InvokePipeline(ps);
                     LogPipelineErrors(ps, "Import-Module ExchangeOnlineManagement");
 
                     if (ps.HadErrors)
                     {
-                        IsConnected = false;
-                        return false;
+                        throw BuildPipelineException(ps);
                     }
                 }
 
                 using (var ps = PowerShell.Create())
                 {
                     ps.Runspace = _runspace;
-                    ps.AddCommand("Connect-ExchangeOnline")
-                      .AddParameter("SkipLoadingFormatData", true)
-                      .AddParameter("ShowBanner", false)
-                      .AddParameter("ErrorAction", "Stop");
-                                        if (useBrowserSignIn) ps.AddParameter("DisableWAM");
-                    ps.Invoke();
+                    InvokeInteractiveConnection(ps, useBrowserSignIn, OperationCancellationToken, CommandTimeout);
                     LogPipelineErrors(ps, "Connect-ExchangeOnline");
 
                     IsConnected = !ps.HadErrors;
@@ -127,11 +122,12 @@ namespace EXOKit.Services
                     using var ps = PowerShell.Create();
                     ps.Runspace = _runspace;
                     ps.AddCommand("Get-ConnectionInformation").AddParameter("ErrorAction", "Stop");
-                    var results = ps.Invoke();
+                    var results = InvokePipeline(ps);
                     if (ps.HadErrors) throw BuildPipelineException(ps);
                     if (results.Count != 1) throw new InvalidOperationException("Expected one Exchange Online connection. Disconnect and reconnect.");
                     if (results.Count > 0)
                     {
+                        ValidateConnection(results[0]);
                         ConnectedUserPrincipalName = results[0].Properties["UserPrincipalName"]?.Value?.ToString();
                         ConnectedTenantId = results[0].Properties["TenantID"]?.Value?.ToString();
                         if (!Guid.TryParse(ConnectedTenantId, out _)) throw new InvalidOperationException("Exchange Online did not return a valid tenant ID.");
@@ -143,11 +139,42 @@ namespace EXOKit.Services
             }
             catch (Exception ex)
             {
+                LastError = ex.Message;
+                ConnectedUserPrincipalName = null;
+                ConnectedTenantId = null;
                 Logger.Log($"EXO connection failed: {ex.Message}", LogType.Error);
                 IsConnected = false;
                 return false;
             }
         });
+
+        internal static void ValidateConnection(PSObject connection)
+        {
+            if (connection.Properties["State"]?.Value?.ToString() != "Connected" ||
+                connection.Properties["TokenStatus"]?.Value?.ToString() != "Active")
+                throw new InvalidOperationException("Exchange Online did not return an active token. Disconnect and reconnect.");
+        }
+
+        internal static void InvokeInteractiveConnection(PowerShell powershell, bool browser, CancellationToken cancellationToken = default, TimeSpan? commandTimeout = null)
+        {
+            void Connect(bool disableWam)
+            {
+                powershell.Commands.Clear();
+                powershell.Streams.Error.Clear();
+                powershell.AddCommand("Connect-ExchangeOnline").AddParameter("SkipLoadingFormatData", true)
+                    .AddParameter("ShowBanner", false).AddParameter("ErrorAction", "Stop");
+                if (disableWam) powershell.AddParameter("DisableWAM");
+                InvokePipelineCore(powershell, cancellationToken, commandTimeout ?? TimeSpan.FromMinutes(5));
+                if (powershell.HadErrors) throw BuildPipelineException(powershell);
+            }
+
+            try { Connect(browser); }
+            catch (Exception exception) when (!browser && System.Text.RegularExpressions.Regex.IsMatch(exception.Message, "WAM|Web Account Manager|window handle|0x(?:ffffffff)?80070520", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            {
+                Logger.Log("EXO WAM sign-in failed; retrying once in the browser.", LogType.Warning);
+                Connect(true);
+            }
+        }
 
         public Task DisconnectAsync() => RunOnStaThreadAsync(() =>
         {
@@ -160,7 +187,7 @@ namespace EXOKit.Services
                     ps.AddCommand("Disconnect-ExchangeOnline")
                       .AddParameter("Confirm", false)
                       .AddParameter("ErrorAction", "SilentlyContinue");
-                    ps.Invoke();
+                    InvokePipeline(ps);
                     Logger.Log("Disconnected from Exchange Online.");
                 }
             }
@@ -195,7 +222,7 @@ namespace EXOKit.Services
             using var ps = PowerShell.Create();
             ps.Runspace = _runspace;
             ps.AddCommand("Get-AcceptedDomain").AddParameter("ErrorAction", "Stop");
-            var results = ps.Invoke();
+            var results = InvokePipeline(ps);
             if (ps.HadErrors) throw BuildPipelineException(ps);
 
             var domains = results
@@ -228,7 +255,7 @@ namespace EXOKit.Services
             ps.Runspace = _runspace;
             ps.AddCommand("Get-Recipient").AddParameter("Identity", identity).AddParameter("ErrorAction", "Continue");
             if (groupMailbox) ps.AddParameter("RecipientTypeDetails", "GroupMailbox");
-            var results = ps.Invoke();
+            var results = InvokePipeline(ps);
             if (ps.HadErrors && ps.Streams.Error.Count > 0 && ps.Streams.Error.All(IsMissingRecipient)) return null;
             if (ps.HadErrors) throw BuildPipelineException(ps);
             if (results.Count == 0) return null;
@@ -251,7 +278,7 @@ namespace EXOKit.Services
                 ps.AddParameter("RecipientTypeDetails", new[] { "RoomMailbox", "EquipmentMailbox" });
             }
             ps.AddParameter("ErrorAction", "Continue");
-            var results = ps.Invoke();
+            var results = InvokePipeline(ps);
             if (ps.HadErrors && ps.Streams.Error.Count > 0 && ps.Streams.Error.All(IsMissingRecipient)) return false;
             if (ps.HadErrors) throw BuildPipelineException(ps);
             if (results.Count > 1) throw new InvalidOperationException("Mailbox identity is ambiguous.");
@@ -274,7 +301,7 @@ namespace EXOKit.Services
             {
                 ps.Runspace = _runspace;
                 ps.AddCommand("Get-EXOMailboxPermission").AddParameter("Identity", mailboxIdentity).AddParameter("ResultSize", "Unlimited").AddParameter("ErrorAction", "Stop");
-                var results = ps.Invoke();
+                var results = InvokePipeline(ps);
                 CheckForNullReferenceServerError(ps);
                 foreach (var r in results)
                 {
@@ -291,8 +318,8 @@ namespace EXOKit.Services
             using (var ps = PowerShell.Create())
             {
                 ps.Runspace = _runspace;
-                ps.AddCommand("Get-MailboxPermission").AddParameter("Identity", mailboxIdentity).AddParameter("User", userIdentity).AddParameter("ErrorAction", "SilentlyContinue");
-                var results = ps.Invoke();
+                ps.AddCommand("Get-MailboxPermission").AddParameter("Identity", mailboxIdentity).AddParameter("User", userIdentity).AddParameter("ErrorAction", "Continue");
+                var results = InvokePipeline(ps);
                 CheckForNullReferenceServerError(ps);
                 foreach (var r in results)
                 {
@@ -326,7 +353,7 @@ namespace EXOKit.Services
               .AddParameter("InheritanceType", "All")
               .AddParameter("Automapping", true)
               .AddParameter("ErrorAction", "Stop");
-            ps.Invoke();
+            InvokePipeline(ps);
             if (ps.HadErrors) throw BuildPipelineException(ps);
         });
 
@@ -348,7 +375,7 @@ namespace EXOKit.Services
               .AddParameter("InheritanceType", "All")
               .AddParameter("Confirm", false)
               .AddParameter("ErrorAction", "Stop");
-            ps.Invoke();
+            InvokePipeline(ps);
             if (ps.HadErrors) throw BuildPipelineException(ps);
         });
 
@@ -366,7 +393,7 @@ namespace EXOKit.Services
                 using var principalQuery = PowerShell.Create();
                 principalQuery.Runspace = _runspace;
                 principalQuery.AddCommand("Get-User").AddParameter("Identity", userIdentity).AddParameter("ErrorAction", "Stop");
-                var principals = principalQuery.Invoke();
+                var principals = InvokePipeline(principalQuery);
                 if (principalQuery.HadErrors) throw BuildPipelineException(principalQuery);
                 if (principals.Count != 1) throw new InvalidOperationException("Trustee security identity is unavailable; state is unconfirmed.");
                 foreach (var property in new[] { "Sid", "SidHistory" })
@@ -377,7 +404,7 @@ namespace EXOKit.Services
             ps.Runspace = _runspace;
             ps.AddCommand("Get-RecipientPermission").AddParameter("Identity", mailboxIdentity)
               .AddParameter("ResultSize", "Unlimited").AddParameter("ErrorAction", "Stop");
-            var results = ps.Invoke();
+            var results = InvokePipeline(ps);
             CheckForNullReferenceServerError(ps);
             var unresolved = new List<string>();
             foreach (var row in results)
@@ -412,7 +439,7 @@ namespace EXOKit.Services
               .AddParameter("AccessRights", "SendAs")
               .AddParameter("Confirm", false)
               .AddParameter("ErrorAction", "Stop");
-            ps.Invoke();
+            InvokePipeline(ps);
             if (ps.HadErrors) throw BuildPipelineException(ps);
         });
 
@@ -430,7 +457,7 @@ namespace EXOKit.Services
               .AddParameter("AccessRights", "SendAs")
               .AddParameter("Confirm", false)
               .AddParameter("ErrorAction", "Stop");
-            ps.Invoke();
+            InvokePipeline(ps);
             if (ps.HadErrors) throw BuildPipelineException(ps);
         });
 
@@ -460,7 +487,7 @@ namespace EXOKit.Services
               .AddParameter("Identity", mailboxIdentity)
               .AddParameter("GrantSendOnBehalfTo", addHash)
               .AddParameter("ErrorAction", "Stop");
-            ps.Invoke();
+            InvokePipeline(ps);
             if (ps.HadErrors) throw BuildPipelineException(ps);
         });
 
@@ -473,7 +500,7 @@ namespace EXOKit.Services
               .AddParameter("Identity", mailboxIdentity)
               .AddParameter("GrantSendOnBehalfTo", removeHash)
               .AddParameter("ErrorAction", "Stop");
-            ps.Invoke();
+            InvokePipeline(ps);
             if (ps.HadErrors) throw BuildPipelineException(ps);
         });
 
@@ -488,7 +515,7 @@ namespace EXOKit.Services
             using var ps = PowerShell.Create();
             ps.Runspace = _runspace;
             ps.AddCommand("Get-DistributionGroupMember").AddParameter("Identity", groupIdentity).AddParameter("ResultSize", "Unlimited").AddParameter("ErrorAction", "SilentlyContinue");
-            var results = ps.Invoke();
+            var results = InvokePipeline(ps);
             if (ps.HadErrors) throw BuildPipelineException(ps);
             foreach (var r in results)
             {
@@ -507,7 +534,7 @@ namespace EXOKit.Services
             using var ps = PowerShell.Create();
             ps.Runspace = _runspace;
             ps.AddCommand("Get-DistributionGroup").AddParameter("Identity", groupIdentity).AddParameter("ErrorAction", "SilentlyContinue");
-            var results = ps.Invoke();
+            var results = InvokePipeline(ps);
             if (ps.HadErrors) throw BuildPipelineException(ps);
             if (results.Count == 0) return false;
             var managedBy = PermissionVerification.ReadStrings(results[0], "ManagedBy");
@@ -531,7 +558,7 @@ namespace EXOKit.Services
                             .AddParameter("BypassSecurityGroupManagerCheck", true)
               .AddParameter("Confirm", false)
               .AddParameter("ErrorAction", "Stop");
-            ps.Invoke();
+            InvokePipeline(ps);
             if (ps.HadErrors) throw BuildPipelineException(ps);
         });
 
@@ -545,7 +572,7 @@ namespace EXOKit.Services
                             .AddParameter("BypassSecurityGroupManagerCheck", true)
               .AddParameter("Confirm", false)
               .AddParameter("ErrorAction", "Stop");
-            ps.Invoke();
+            InvokePipeline(ps);
             if (ps.HadErrors) throw BuildPipelineException(ps);
         });
 
@@ -559,7 +586,7 @@ namespace EXOKit.Services
               .AddParameter("ManagedBy", addHash)
               .AddParameter("BypassSecurityGroupManagerCheck", true)
               .AddParameter("ErrorAction", "Stop");
-            ps.Invoke();
+            InvokePipeline(ps);
             if (ps.HadErrors) throw BuildPipelineException(ps);
         });
 
@@ -573,7 +600,7 @@ namespace EXOKit.Services
               .AddParameter("ManagedBy", removeHash)
               .AddParameter("BypassSecurityGroupManagerCheck", true)
               .AddParameter("ErrorAction", "Stop");
-            ps.Invoke();
+            InvokePipeline(ps);
             if (ps.HadErrors) throw BuildPipelineException(ps);
         });
 
@@ -585,14 +612,14 @@ namespace EXOKit.Services
             using var organization = PowerShell.Create();
             organization.Runspace = _runspace;
             organization.AddCommand("Get-OrganizationConfig").AddParameter("ErrorAction", "Stop");
-            var organizations = organization.Invoke();
+            var organizations = InvokePipeline(organization);
             if (organization.HadErrors) throw BuildPipelineException(organization);
             if (organizations.Count != 1 || organizations[0].Properties["BookingsEnabled"]?.Value is not true)
                 throw new InvalidOperationException("Bookings is disabled or its organization setting could not be verified. No access changes were made.");
             using var policy = PowerShell.Create();
             policy.Runspace = _runspace;
             policy.AddCommand("Get-OwaMailboxPolicy").AddParameter("Identity", policyName).AddParameter("ErrorAction", "Stop");
-            var policies = policy.Invoke();
+            var policies = InvokePipeline(policy);
             if (policy.HadErrors) throw BuildPipelineException(policy);
             if (policies.Count != 1 || policies[0].Properties["BookingsMailboxCreationEnabled"]?.Value is not true)
                 throw new InvalidOperationException("The configured OWA policy does not enable Bookings creation, or its setting could not be verified. No access changes were made.");
@@ -603,7 +630,7 @@ namespace EXOKit.Services
             using var ps = PowerShell.Create();
             ps.Runspace = _runspace;
             ps.AddCommand("Get-CASMailbox").AddParameter("Identity", userIdentity).AddParameter("ErrorAction", "Stop");
-            var results = ps.Invoke();
+            var results = InvokePipeline(ps);
             if (ps.HadErrors) throw BuildPipelineException(ps);
             if (results.Count == 0) return null;
             return results[0].Properties["OwaMailboxPolicy"]?.Value?.ToString();
@@ -617,7 +644,7 @@ namespace EXOKit.Services
               .AddParameter("Identity", userIdentity)
               .AddParameter("OwaMailboxPolicy", owaPolicyName)
               .AddParameter("ErrorAction", "Stop");
-            ps.Invoke();
+            InvokePipeline(ps);
             if (ps.HadErrors) throw BuildPipelineException(ps);
         });
 
@@ -634,7 +661,7 @@ namespace EXOKit.Services
             {
                 ps.Runspace = _runspace;
                 ps.AddCommand("Get-UnifiedGroupLinks").AddParameter("Identity", groupIdentity).AddParameter("LinkType", "Owners").AddParameter("ResultSize", "Unlimited").AddParameter("ErrorAction", "Stop");
-                foreach (var r in ps.Invoke())
+                foreach (var r in InvokePipeline(ps))
                 {
                     rows.Add((r.Properties["DisplayName"]?.Value?.ToString() ?? string.Empty, r.Properties["PrimarySmtpAddress"]?.Value?.ToString() ?? string.Empty, "Owner"));
                 }
@@ -645,7 +672,7 @@ namespace EXOKit.Services
             {
                 ps.Runspace = _runspace;
                 ps.AddCommand("Get-UnifiedGroupLinks").AddParameter("Identity", groupIdentity).AddParameter("LinkType", "Members").AddParameter("ResultSize", "Unlimited").AddParameter("ErrorAction", "Stop");
-                foreach (var r in ps.Invoke())
+                foreach (var r in InvokePipeline(ps))
                 {
                     rows.Add((r.Properties["DisplayName"]?.Value?.ToString() ?? string.Empty, r.Properties["PrimarySmtpAddress"]?.Value?.ToString() ?? string.Empty, "Member"));
                 }
@@ -660,7 +687,7 @@ namespace EXOKit.Services
         /// Group / Mail-Enabled Security Group, ported from the corresponding branches of
         /// M365_Reporting_Tool.ps1 (Get-DistributionGroup / Get-DynamicDistributionGroup + members).
         /// </summary>
-        public Task<List<(string DisplayName, string PrimarySmtpAddress, string Role)>> GetDistributionGroupReportLinksAsync(string groupIdentity, bool isDynamic) => RunOnStaThreadAsync(() =>
+        public Task<List<(string DisplayName, string PrimarySmtpAddress, string Role)>> GetDistributionGroupReportLinksAsync(string groupIdentity, bool isDynamic, Action<string, string>? onUnresolvedOwner = null) => RunOnStaThreadAsync(() =>
         {
             var rows = new List<(string, string, string)>();
             string[] managedBy;
@@ -669,7 +696,7 @@ namespace EXOKit.Services
             {
                 ps.Runspace = _runspace;
                 ps.AddCommand(isDynamic ? "Get-DynamicDistributionGroup" : "Get-DistributionGroup").AddParameter("Identity", groupIdentity).AddParameter("ErrorAction", "Stop");
-                var results = ps.Invoke();
+                var results = InvokePipeline(ps);
                 if (ps.HadErrors) throw BuildPipelineException(ps);
                 if (results.Count != 1) throw new InvalidOperationException("Group could not be read; report is unconfirmed.");
                 managedBy = PermissionVerification.ReadStrings(results[0], "ManagedBy");
@@ -677,15 +704,19 @@ namespace EXOKit.Services
 
             foreach (var owner in managedBy)
             {
-                using var ps = PowerShell.Create();
-                ps.Runspace = _runspace;
-                ps.AddCommand("Get-Recipient").AddParameter("Identity", owner).AddParameter("ErrorAction", "SilentlyContinue");
-                var results = ps.Invoke();
-                if (ps.HadErrors) throw BuildPipelineException(ps);
-                if (results.Count != 1) throw new InvalidOperationException($"Owner '{owner}' could not be resolved; report is incomplete.");
-                if (results.Count > 0)
+                try
                 {
+                    using var ps = PowerShell.Create();
+                    ps.Runspace = _runspace;
+                    ps.AddCommand("Get-Recipient").AddParameter("Identity", owner).AddParameter("ErrorAction", "Continue");
+                    var results = InvokePipeline(ps);
+                    if (ps.HadErrors) throw BuildPipelineException(ps);
+                    if (results.Count != 1) throw new InvalidOperationException($"Owner '{owner}' could not be resolved.");
                     rows.Add((results[0].Properties["DisplayName"]?.Value?.ToString() ?? string.Empty, results[0].Properties["PrimarySmtpAddress"]?.Value?.ToString() ?? string.Empty, "Owner"));
+                }
+                catch (Exception ex) when (onUnresolvedOwner != null && ex is not OperationCanceledException && !OperationCancellationToken.IsCancellationRequested)
+                {
+                    onUnresolvedOwner(owner, ex.Message);
                 }
             }
 
@@ -701,7 +732,7 @@ namespace EXOKit.Services
                     ps.AddCommand("Get-DistributionGroupMember").AddParameter("Identity", groupIdentity).AddParameter("ResultSize", "Unlimited").AddParameter("ErrorAction", "Stop");
                 }
 
-                foreach (var r in ps.Invoke())
+                foreach (var r in InvokePipeline(ps))
                 {
                     rows.Add((r.Properties["DisplayName"]?.Value?.ToString() ?? string.Empty, r.Properties["PrimarySmtpAddress"]?.Value?.ToString() ?? string.Empty, "Member"));
                 }
@@ -722,11 +753,13 @@ namespace EXOKit.Services
 
         private Task<List<string>> GetAllFullAccessDelegatesCoreAsync(string mailboxIdentity) => RunOnStaThreadAsync(() =>
         {
+            var recipient = ResolvePermissionReportTarget(mailboxIdentity);
             using var ps = PowerShell.Create();
             ps.Runspace = _runspace;
-            ps.AddCommand("Get-EXOMailboxPermission").AddParameter("Identity", mailboxIdentity).AddParameter("ResultSize", "Unlimited").AddParameter("ErrorAction", "Stop");
-            var results = ps.Invoke();
+            ps.AddCommand("Get-EXOMailboxPermission").AddParameter("PrimarySmtpAddress", recipient.PrimarySmtpAddress).AddParameter("ResultSize", "Unlimited").AddParameter("ErrorAction", "Stop");
+            var results = InvokePipeline(ps);
             if (ps.HadErrors) throw BuildPipelineException(ps);
+            ValidatePermissionReportScope(results, recipient);
 
             return results
                 .Where(r =>
@@ -754,11 +787,13 @@ namespace EXOKit.Services
 
         private Task<List<string>> GetAllSendAsDelegatesCoreAsync(string mailboxIdentity) => RunOnStaThreadAsync(() =>
         {
+            var recipient = ResolvePermissionReportTarget(mailboxIdentity);
             using var ps = PowerShell.Create();
             ps.Runspace = _runspace;
-            ps.AddCommand("Get-EXORecipientPermission").AddParameter("Identity", mailboxIdentity).AddParameter("ResultSize", "Unlimited").AddParameter("ErrorAction", "Stop");
-            var results = ps.Invoke();
+            ps.AddCommand("Get-EXORecipientPermission").AddParameter("PrimarySmtpAddress", recipient.PrimarySmtpAddress).AddParameter("ResultSize", "Unlimited").AddParameter("ErrorAction", "Stop");
+            var results = InvokePipeline(ps);
             if (ps.HadErrors) throw BuildPipelineException(ps);
+            ValidatePermissionReportScope(results, recipient);
 
             return results
                 .Where(r =>
@@ -776,18 +811,38 @@ namespace EXOKit.Services
                 .ToList();
         });
 
+        private RecipientInfo ResolvePermissionReportTarget(string identity)
+        {
+            var recipient = FindRecipient(identity);
+            if (string.IsNullOrWhiteSpace(recipient?.PrimarySmtpAddress))
+                throw new InvalidOperationException($"Cannot resolve a primary SMTP address for '{identity}'. No permission query was run.");
+            return recipient;
+        }
+
+        private static void ValidatePermissionReportScope(IEnumerable<PSObject> results, RecipientInfo recipient)
+        {
+            var keys = recipient.Keys(recipient.PrimarySmtpAddress!).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var result in results)
+            {
+                var identity = result.Properties["Identity"]?.Value?.ToString();
+                if (!string.IsNullOrWhiteSpace(identity) && !keys.Contains(identity))
+                    throw new InvalidOperationException($"Exchange returned permissions for unexpected recipient '{identity}' instead of '{recipient.PrimarySmtpAddress}'. This section is unconfirmed; no out-of-scope rows were included.");
+            }
+        }
+
         /// <summary>
         /// Enumerates Send on Behalf delegates for a mailbox, resolving each entry's DN/GUID to a
         /// friendly display value where possible, ported from GrantSendOnBehalfTo usage in both scripts.
         /// </summary>
-        public Task<List<string>> GetAllSendOnBehalfDelegatesAsync(string mailboxIdentity) => RunOnStaThreadAsync(() =>
+        public Task<List<string>> GetAllSendOnBehalfDelegatesAsync(string mailboxIdentity, Action<string, string>? onUnresolvedDelegate = null) => RunOnStaThreadAsync(() =>
         {
+            ArgumentException.ThrowIfNullOrWhiteSpace(mailboxIdentity);
             using var ps = PowerShell.Create();
             ps.Runspace = _runspace;
             ps.AddCommand("Get-Mailbox").AddParameter("Identity", mailboxIdentity).AddParameter("ErrorAction", "Stop");
-            var results = ps.Invoke();
+            var results = InvokePipeline(ps);
             if (ps.HadErrors) throw BuildPipelineException(ps);
-            if (results.Count == 0) return new List<string>();
+            if (results.Count != 1) throw new InvalidOperationException("Mailbox could not be read; Send on Behalf permissions are unconfirmed.");
 
             var delegates = PermissionVerification.ReadStrings(results[0], "GrantSendOnBehalfTo");
 
@@ -797,13 +852,21 @@ namespace EXOKit.Services
                 var delegateStr = delegateObj?.ToString();
                 if (string.IsNullOrEmpty(delegateStr)) continue;
 
-                using var lookupPs = PowerShell.Create();
-                lookupPs.Runspace = _runspace;
-                lookupPs.AddCommand("Get-Recipient").AddParameter("Identity", delegateStr).AddParameter("ErrorAction", "SilentlyContinue");
-                var lookupResults = lookupPs.Invoke();
-                if (lookupPs.HadErrors) throw BuildPipelineException(lookupPs);
-                if (lookupResults.Count == 0) throw new InvalidOperationException($"Cannot resolve Send on Behalf delegate '{delegateStr}'.");
-                resolved.Add(lookupResults.Count > 0 ? (lookupResults[0].Properties["PrimarySmtpAddress"]?.Value?.ToString() ?? delegateStr) : delegateStr);
+                try
+                {
+                    using var lookupPs = PowerShell.Create();
+                    lookupPs.Runspace = _runspace;
+                    lookupPs.AddCommand("Get-Recipient").AddParameter("Identity", delegateStr).AddParameter("ErrorAction", "Continue");
+                    var lookupResults = InvokePipeline(lookupPs);
+                    if (lookupPs.HadErrors) throw BuildPipelineException(lookupPs);
+                    if (lookupResults.Count != 1 || string.IsNullOrWhiteSpace(lookupResults[0].Properties["PrimarySmtpAddress"]?.Value?.ToString()))
+                        throw new InvalidOperationException($"Cannot resolve Send on Behalf delegate '{delegateStr}'.");
+                    resolved.Add(lookupResults[0].Properties["PrimarySmtpAddress"].Value.ToString()!);
+                }
+                catch (Exception ex) when (onUnresolvedDelegate != null && ex is not OperationCanceledException && !OperationCancellationToken.IsCancellationRequested)
+                {
+                    onUnresolvedDelegate(delegateStr, ex.Message);
+                }
             }
             return resolved;
         });
@@ -824,7 +887,7 @@ namespace EXOKit.Services
               .AddParameter("Shared", true)
               .AddParameter("Confirm", false)
               .AddParameter("ErrorAction", "Stop");
-            ps.Invoke();
+            InvokePipeline(ps);
             if (ps.HadErrors) throw BuildPipelineException(ps);
         });
 
@@ -858,7 +921,7 @@ namespace EXOKit.Services
             {
                 ps.AddParameter("Members", members);
             }
-            ps.Invoke();
+            InvokePipeline(ps);
             if (ps.HadErrors) throw BuildPipelineException(ps);
 
         });
@@ -886,7 +949,7 @@ namespace EXOKit.Services
             {
                 ps.AddParameter("Members", members);
             }
-            var results = ps.Invoke();
+            var results = InvokePipeline(ps);
             if (ps.HadErrors) throw BuildPipelineException(ps);
 
             return results.FirstOrDefault()?.Properties["ExternalDirectoryObjectId"]?.Value?.ToString();
@@ -901,7 +964,7 @@ namespace EXOKit.Services
               .AddParameter("Department", department)
               .AddParameter("Confirm", false)
               .AddParameter("ErrorAction", "Stop");
-            ps.Invoke();
+            InvokePipeline(ps);
             if (ps.HadErrors) throw BuildPipelineException(ps);
         });
 
@@ -914,7 +977,7 @@ namespace EXOKit.Services
               .AddParameter("Archive", true)
               .AddParameter("Confirm", false)
               .AddParameter("ErrorAction", "Stop");
-            ps.Invoke();
+            InvokePipeline(ps);
             if (ps.HadErrors) throw BuildPipelineException(ps);
         });
 
@@ -927,7 +990,7 @@ namespace EXOKit.Services
               .AddParameter("HiddenFromAddressListsEnabled", hidden)
               .AddParameter("Confirm", false)
               .AddParameter("ErrorAction", "Stop");
-            ps.Invoke();
+            InvokePipeline(ps);
             if (ps.HadErrors) throw BuildPipelineException(ps);
         });
 
@@ -953,7 +1016,7 @@ namespace EXOKit.Services
             {
                 ps.AddParameter("RejectMessagesFrom", blockedSenders);
             }
-            ps.Invoke();
+            InvokePipeline(ps);
             if (ps.HadErrors) throw BuildPipelineException(ps);
         });
 
@@ -970,7 +1033,7 @@ namespace EXOKit.Services
             using var ps = PowerShell.Create();
             ps.Runspace = _runspace;
             ps.AddCommand("Get-DistributionGroup").AddParameter("Identity", identity).AddParameter("ErrorAction", "Stop");
-            var results = ps.Invoke();
+            var results = InvokePipeline(ps);
             if (ps.HadErrors) throw BuildPipelineException(ps);
             if (results.Count == 0) return null;
 
@@ -1011,7 +1074,7 @@ namespace EXOKit.Services
               .AddParameter("BypassSecurityGroupManagerCheck", true)
               .AddParameter("Confirm", false)
               .AddParameter("ErrorAction", "Stop");
-            ps.Invoke();
+            InvokePipeline(ps);
             if (ps.HadErrors) throw BuildPipelineException(ps);
         });
 
@@ -1030,7 +1093,7 @@ namespace EXOKit.Services
               .AddParameter("Identity", identity)
               .AddParameter("AccessRights", "SendAs")
               .AddParameter("ErrorAction", "SilentlyContinue");
-            var results = ps.Invoke();
+            var results = InvokePipeline(ps);
             CheckForNullReferenceServerError(ps);
             return results
                 .Where(result => !string.Equals(result.Properties["AccessControlType"]?.Value?.ToString(), "Deny", StringComparison.OrdinalIgnoreCase)
@@ -1056,7 +1119,7 @@ namespace EXOKit.Services
               .AddParameter("BypassSecurityGroupManagerCheck", true)
               .AddParameter("Confirm", false)
               .AddParameter("ErrorAction", "Stop");
-            ps.Invoke();
+            InvokePipeline(ps);
             if (ps.HadErrors) throw BuildPipelineException(ps);
         });
 
@@ -1075,7 +1138,7 @@ namespace EXOKit.Services
               .AddParameter("BypassSecurityGroupManagerCheck", true)
               .AddParameter("Confirm", false)
               .AddParameter("ErrorAction", "Stop");
-            ps.Invoke();
+            InvokePipeline(ps);
             if (ps.HadErrors) throw BuildPipelineException(ps);
         });
 
@@ -1098,7 +1161,7 @@ namespace EXOKit.Services
               .AddParameter("BypassSecurityGroupManagerCheck", true)
               .AddParameter("Confirm", false)
               .AddParameter("ErrorAction", "Stop");
-            ps.Invoke();
+            InvokePipeline(ps);
             if (ps.HadErrors) throw BuildPipelineException(ps);
         });
 
@@ -1118,7 +1181,7 @@ namespace EXOKit.Services
               .AddParameter("BypassSecurityGroupManagerCheck", true)
               .AddParameter("Confirm", false)
               .AddParameter("ErrorAction", "Stop");
-            ps.Invoke();
+            InvokePipeline(ps);
             if (ps.HadErrors) throw BuildPipelineException(ps);
         });
 
@@ -1154,6 +1217,7 @@ namespace EXOKit.Services
                 Alias = GetString("Alias"),
                 DistinguishedName = GetString("DistinguishedName"),
                 Guid = GetString("Guid"),
+                ExternalDirectoryObjectId = GetString("ExternalDirectoryObjectId"),
                 PrimarySmtpAddress = GetString("PrimarySmtpAddress"),
                 UserPrincipalName = GetString("UserPrincipalName"),
                 Identity = GetString("Identity"),
@@ -1246,13 +1310,20 @@ namespace EXOKit.Services
         private Task<T> RunOnStaThreadAsync<T>(Func<T> work)
         {
             EnsureStaThreadStarted();
+            var cancellationToken = OperationCancellationToken;
             var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
             _workQueue.Add(() =>
             {
                 try
                 {
-                    OperationCancellationToken.ThrowIfCancellationRequested();
-                    tcs.SetResult(work());
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var result = work();
+                    cancellationToken.ThrowIfCancellationRequested();
+                    tcs.SetResult(result);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    tcs.SetCanceled(cancellationToken);
                 }
                 catch (Exception ex)
                 {
@@ -1260,6 +1331,60 @@ namespace EXOKit.Services
                 }
             });
             return tcs.Task;
+        }
+
+        private System.Collections.ObjectModel.Collection<PSObject> InvokePipeline(PowerShell powershell) =>
+            InvokePipelineCore(powershell, OperationCancellationToken, CommandTimeout);
+
+        internal static System.Collections.ObjectModel.Collection<PSObject> InvokePipelineCore(PowerShell powershell, CancellationToken cancellationToken, TimeSpan timeout)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(timeout);
+            var stopLock = new object();
+            Task? stopTask = null;
+            void RequestStop()
+            {
+                lock (stopLock)
+                {
+                    if (powershell.InvocationStateInfo.State == PSInvocationState.Running)
+                        stopTask ??= powershell.StopAsync(null, null);
+                }
+            }
+            void OnStateChanged(object? sender, PSInvocationStateChangedEventArgs args)
+            {
+                if (args.InvocationStateInfo.State == PSInvocationState.Running && deadline.IsCancellationRequested)
+                    RequestStop();
+            }
+            void ThrowIfStopped()
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (deadline.IsCancellationRequested)
+                    throw new TimeoutException($"Exchange command '{powershell.Commands.Commands.FirstOrDefault()?.CommandText}' timed out after {timeout.TotalSeconds:0} seconds. Its result is unconfirmed; reload and verify before retrying changes.");
+            }
+
+            powershell.InvocationStateChanged += OnStateChanged;
+            var registration = deadline.Token.Register(RequestStop);
+            try
+            {
+                ThrowIfStopped();
+                var results = powershell.Invoke();
+                ThrowIfStopped();
+                return results;
+            }
+            catch (Exception) when (deadline.IsCancellationRequested)
+            {
+                ThrowIfStopped();
+                throw;
+            }
+            finally
+            {
+                registration.Dispose();
+                powershell.InvocationStateChanged -= OnStateChanged;
+                Task? stopping;
+                lock (stopLock) stopping = stopTask;
+                stopping?.GetAwaiter().GetResult();
+            }
         }
 
         private Task RunOnStaThreadAsync(Action work) => RunOnStaThreadAsync<object?>(() =>
