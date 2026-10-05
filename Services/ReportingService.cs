@@ -5,6 +5,16 @@ using System.Threading.Tasks;
 
 namespace EXOKit.Services
 {
+    public enum ReportKind
+    {
+        GroupMembership,
+        MailboxPermissions
+    }
+
+    public sealed record ReportDefinition(ReportKind Kind, string Name, ReportTargetKind TargetKind, string TargetLabel, string Placeholder);
+
+    public sealed record GeneratedReport(ReportTargetInfo Target, IReadOnlyList<ReportRow> Rows);
+
     /// <summary>
     /// A single row of a generated report (membership/ownership role or a mailbox permission entry).
     /// </summary>
@@ -54,9 +64,34 @@ namespace EXOKit.Services
     {
         private readonly ExoPowerShellService _exo;
 
+        public static IReadOnlyList<ReportDefinition> ReportTypes { get; } = Array.AsReadOnly(new[]
+        {
+            new ReportDefinition(ReportKind.GroupMembership, "Group membership and owners", ReportTargetKind.Group, "Group", "Group email, alias, or object ID"),
+            new ReportDefinition(ReportKind.MailboxPermissions, "Mailbox permissions", ReportTargetKind.Mailbox, "Mailbox", "Mailbox email, alias, or object ID")
+        });
+
         public ReportingService(ExoPowerShellService exo)
         {
             _exo = exo;
+        }
+
+        public async Task<GeneratedReport> GenerateAsync(ReportKind kind, string identity)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(identity);
+            var definition = ReportTypes.FirstOrDefault(report => report.Kind == kind)
+                ?? throw new ArgumentOutOfRangeException(nameof(kind));
+            _exo.OperationCancellationToken.ThrowIfCancellationRequested();
+            var target = await ClassifyReportTargetAsync(identity.Trim());
+            if (target.Kind != definition.TargetKind)
+                throw new InvalidOperationException($"{definition.Name} requires a {definition.TargetLabel.ToLowerInvariant()}. '{target.Name}' is a {target.FriendlyType}.");
+            var rows = kind switch
+            {
+                ReportKind.GroupMembership => await GenerateObjectReportAsync(target.Identity),
+                ReportKind.MailboxPermissions => await GetMailboxDelegatesAsync(target.Identity),
+                _ => throw new ArgumentOutOfRangeException(nameof(kind))
+            };
+            _exo.OperationCancellationToken.ThrowIfCancellationRequested();
+            return new GeneratedReport(target, rows);
         }
 
         public static IEnumerable<string> CreateCsvLines(IEnumerable<ReportRow> rows)

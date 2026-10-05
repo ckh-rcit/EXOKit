@@ -59,6 +59,7 @@ namespace EXOKit
         private string? _userSearchTenantId;
         private double _lastExpandedOutputHeight = 220;
         private bool _outputCollapsed;
+        private bool _outputHiddenForPage;
         private bool _showWarnings = true;
         private int _visibleLogEntries;
         private int _ticketLogEntries;
@@ -97,6 +98,10 @@ namespace EXOKit
             _serviceNowService = _config.Settings.ServiceNow != null ? new ServiceNowService(_config.Settings.ServiceNow, _config.Settings.GraphApi) : null;
 
             ListViewReportResults.ItemsSource = _reportResults;
+            ComboBoxReportType.ItemsSource = ReportingService.ReportTypes;
+            ComboBoxReportType.SelectedIndex = 0;
+            ComboBoxReportType.SelectionChanged += (_, _) => UpdateReportType();
+            UpdateReportType();
             ListViewRecipientResults.ItemsSource = _recipientCheckResults;
             ListViewUserSearch.ItemsSource = _userSearchResults;
             TextBoxUserSearch.TextChanged += (_, _) => ResetUserSearch();
@@ -338,7 +343,7 @@ namespace EXOKit
 
         private void ResizeOutput(double height)
         {
-            if (_outputCollapsed || WorkspaceGrid.ActualHeight <= 0) return;
+            if (_outputCollapsed || _outputHiddenForPage || WorkspaceGrid.ActualHeight <= 0) return;
             var maximum = Math.Max(140, WorkspaceGrid.ActualHeight - ConnectionBar.ActualHeight - 252);
             _lastExpandedOutputHeight = Math.Clamp(height, 140, maximum);
             OutputRow.Height = new GridLength(_lastExpandedOutputHeight);
@@ -355,6 +360,16 @@ namespace EXOKit
                 ConnectionControls.Margin = wide ? new Thickness(16, 0, 0, 0) : new Thickness(0, 12, 0, 0);
             }
             if (OutputRow != null && ConnectionBar != null) ResizeOutput(_lastExpandedOutputHeight);
+            if (ReportInputs != null)
+            {
+                var wide = e.NewSize.Width >= 920;
+                Grid.SetColumnSpan(ComboBoxReportType, wide ? 1 : 3);
+                Grid.SetRow(TextBoxReportingIdentity, wide ? 0 : 1);
+                Grid.SetColumn(TextBoxReportingIdentity, wide ? 1 : 0);
+                Grid.SetColumnSpan(TextBoxReportingIdentity, wide ? 1 : 2);
+                Grid.SetRow(ButtonGenerateReport, wide ? 0 : 1);
+                ReportInputs.RowSpacing = wide ? 0 : 12;
+            }
         }
 
         private void OutputResizeHandle_DragDelta(object sender, DragDeltaEventArgs e)
@@ -451,6 +466,12 @@ namespace EXOKit
             PanelReporting.Visibility = Visibility.Collapsed;
             PanelSnapshots.Visibility = Visibility.Collapsed;
             PanelSettings.Visibility = Visibility.Collapsed;
+
+            _outputHiddenForPage = tag is "Settings" or "UserSearch" or "Reporting";
+            OutputPanel.Visibility = _outputHiddenForPage ? Visibility.Collapsed : Visibility.Visible;
+            OutputRow.Height = _outputHiddenForPage ? new GridLength(0)
+                : _outputCollapsed ? GridLength.Auto : new GridLength(_lastExpandedOutputHeight);
+            if (!_outputHiddenForPage) ResizeOutput(_lastExpandedOutputHeight);
 
             switch (tag)
             {
@@ -586,6 +607,11 @@ namespace EXOKit
             else if (_userSearchTenantId == null)
                 SetUserSearchStatus("Ready to search", "", InfoBarSeverity.Informational);
             UpdateUserSearchControls();
+            if (_reportTenantId != null && (!_exo.IsConnected || !string.Equals(_reportTenantId, _exo.ConnectedTenantId, StringComparison.OrdinalIgnoreCase)))
+                ResetReport();
+            else if (_reportTenantId == null)
+                SetReportStatus(_exo.IsConnected ? "Ready" : "EXO not connected", "", InfoBarSeverity.Informational);
+            UpdateReportingControls();
         }
 
         // --- Connection handlers ---
@@ -1369,20 +1395,38 @@ namespace EXOKit
 
         // --- Reporting ---
 
-        private ReportTargetInfo? _validatedReportTarget;
+        private string? _reportTenantId;
 
-        private void TextBoxReportingIdentity_TextChanged(object sender, TextChangedEventArgs e)
+        private void UpdateReportType()
         {
-            // Any edit to the identity invalidates the previous Validate result, so the user can't
-            // run a report against a stale/mismatched type confirmation.
-            _validatedReportTarget = null;
+            if (ComboBoxReportType.SelectedItem is ReportDefinition definition)
+            {
+                TextBoxReportingIdentity.Header = definition.TargetLabel;
+                TextBoxReportingIdentity.PlaceholderText = definition.Placeholder;
+            }
+            ResetReport();
+        }
+
+        private void TextBoxReportingIdentity_TextChanged(object sender, TextChangedEventArgs e) => ResetReport();
+
+        private void ResetReport()
+        {
+            _reportTenantId = null;
             _reportResults.Clear();
-            if (ButtonExportReportCsv == null) return;
-            ButtonExportReportCsv.IsEnabled = false;
-            ButtonGenerateObjectReport.IsEnabled = false;
-            ButtonGetMailboxDelegates.IsEnabled = false;
-            TextBlockReportingValidation.Text = "Enter an identity and click Validate to confirm its type before running a report.";
-            if (ReportStatus != null) SetReportStatus("No report generated", "", InfoBarSeverity.Informational);
+            if (ReportStatus == null || ButtonGenerateReport == null) return;
+            TextBlockReportCount.Text = "0 entries";
+            TextBlockReportTarget.Text = "";
+            ReportEmptyState.Text = "No report generated";
+            ReportEmptyState.Visibility = Visibility.Visible;
+            SetReportStatus(_exo.IsConnected ? "Ready" : "EXO not connected", "", InfoBarSeverity.Informational);
+            UpdateReportingControls();
+        }
+
+        private void UpdateReportingControls()
+        {
+            ButtonGenerateReport.IsEnabled = !_operationInProgress && _exo.IsConnected
+                && ComboBoxReportType.SelectedItem is ReportDefinition && !string.IsNullOrWhiteSpace(TextBoxReportingIdentity.Text);
+            ButtonExportReportCsv.IsEnabled = !_operationInProgress && _reportResults.Count > 0;
         }
 
         private void SetReportStatus(string title, string message, InfoBarSeverity severity)
@@ -1393,123 +1437,39 @@ namespace EXOKit
             ReportStatus.IsOpen = true;
         }
 
-        private async void ButtonValidateReportingIdentity_Click(object sender, RoutedEventArgs e)
-            => await RunUiOperationAsync(ValidateReportingIdentityAsync);
+        private async void ButtonGenerateReport_Click(object sender, RoutedEventArgs e) =>
+            await RunUiOperationAsync(GenerateReportAsync, readOnly: true);
 
-        private async Task ValidateReportingIdentityAsync()
+        private async void TextBoxReportingIdentity_KeyDown(object sender, KeyRoutedEventArgs e)
         {
-            if (!_exo.IsConnected)
-            {
-                await ShowMessageAsync("Connect to EXO first.", "EXO Not Connected");
-                return;
-            }
-
-            var identity = TextBoxReportingIdentity.Text.Trim();
-            if (string.IsNullOrEmpty(identity))
-            {
-                await ShowMessageAsync("Enter a group, distribution list, or mailbox identity.", "Input Missing");
-                return;
-            }
-
-            ButtonValidateReportingIdentity.IsEnabled = false;
-            _reportResults.Clear();
-            ButtonExportReportCsv.IsEnabled = false;
-            SetReportStatus("Validating", identity, InfoBarSeverity.Informational);
-            ButtonGenerateObjectReport.IsEnabled = false;
-            ButtonGetMailboxDelegates.IsEnabled = false;
-            _validatedReportTarget = null;
-            TextBlockReportingValidation.Text = "Validating...";
-            try
-            {
-                var target = await _reportingService.ClassifyReportTargetAsync(identity);
-                _validatedReportTarget = target;
-
-                switch (target.Kind)
-                {
-                    case ReportTargetKind.Group:
-                        ButtonGenerateObjectReport.IsEnabled = true;
-                        TextBlockReportingValidation.Text = $"'{target.Name}' ({target.PrimarySmtpAddress}) is a {target.FriendlyType}.";
-                        break;
-                    case ReportTargetKind.Mailbox:
-                        ButtonGetMailboxDelegates.IsEnabled = true;
-                        TextBlockReportingValidation.Text = $"'{target.Name}' ({target.PrimarySmtpAddress}) is a {target.FriendlyType}. Use 'Get Mailbox Delegates'.";
-                        break;
-                    default:
-                        TextBlockReportingValidation.Text = $"'{target.Name}' ({target.PrimarySmtpAddress}) is a '{target.FriendlyType}', which is not supported for reporting.";
-                        Logger.Log($"Reporting validation: '{identity}' resolved to unsupported type '{target.RecipientTypeDetails}'.", LogType.Warning);
-                        break;
-                }
-
-                Logger.Log($"Reporting validation: '{identity}' is a {target.FriendlyType}.", LogType.Success);
-                SetReportStatus(target.Kind == ReportTargetKind.Unsupported ? "Unsupported target" : "Ready to generate report", target.PrimarySmtpAddress, InfoBarSeverity.Informational);
-            }
-            catch (OperationCanceledException)
-            {
-                TextBlockReportingValidation.Text = "Validation cancelled.";
-                SetReportStatus("Validation cancelled", "No report generated.", InfoBarSeverity.Warning);
-                throw;
-            }
-            catch (Exception ex)
-            {
-                TextBlockReportingValidation.Text = $"Validation failed: {ex.Message}";
-                SetReportStatus("Validation failed", ex.Message, InfoBarSeverity.Error);
-                Logger.Log($"Reporting validation failed for '{identity}': {ex.Message}", LogType.Error);
-                await ShowMessageAsync(ex.Message, "Validation Failed");
-            }
-            finally
-            {
-                ButtonValidateReportingIdentity.IsEnabled = true;
-            }
+            if (e.Key != Windows.System.VirtualKey.Enter || !ButtonGenerateReport.IsEnabled) return;
+            e.Handled = true;
+            await RunUiOperationAsync(GenerateReportAsync, readOnly: true);
         }
 
-        private async void ButtonGenerateObjectReport_Click(object sender, RoutedEventArgs e)
-            => await RunUiOperationAsync(GenerateObjectReportAsync);
-
-        private Task GenerateObjectReportAsync() => GenerateReportAsync(ReportTargetKind.Group);
-
-        private async void ButtonGetMailboxDelegates_Click(object sender, RoutedEventArgs e)
-            => await RunUiOperationAsync(GetMailboxDelegatesAsync);
-
-        private Task GetMailboxDelegatesAsync() => GenerateReportAsync(ReportTargetKind.Mailbox);
-
-        private async Task GenerateReportAsync(ReportTargetKind kind)
+        private async Task GenerateReportAsync()
         {
-            if (!_exo.IsConnected)
-            {
-                await ShowMessageAsync("Connect to EXO first.", "EXO Not Connected");
-                return;
-            }
-
+            if (!_exo.IsConnected) throw new InvalidOperationException("Connect to Exchange Online before generating a report.");
+            if (ComboBoxReportType.SelectedItem is not ReportDefinition definition) return;
             var identity = TextBoxReportingIdentity.Text.Trim();
-            if (string.IsNullOrEmpty(identity))
-            {
-                await ShowMessageAsync("Enter a group, distribution list, or mailbox identity.", "Input Missing");
-                return;
-            }
-
-            if (_validatedReportTarget == null || _validatedReportTarget.Kind != kind)
-            {
-                await ShowMessageAsync("Validate this identity before generating a report.", "Not Validated");
-                return;
-            }
-
-            ButtonGenerateObjectReport.IsEnabled = false;
-            ButtonGetMailboxDelegates.IsEnabled = false;
-            ButtonExportReportCsv.IsEnabled = false;
-            _reportResults.Clear();
-            SetReportStatus("Generating report", identity, InfoBarSeverity.Informational);
+            ResetReport();
+            _reportTenantId = _exo.ConnectedTenantId;
+            ReportEmptyState.Text = "Generating report...";
+            SetReportStatus("Generating report", $"{definition.Name}: {identity}", InfoBarSeverity.Informational);
             try
             {
-                Logger.Log($"Generating report for '{identity}'...");
-                var rows = kind == ReportTargetKind.Group
-                    ? await _reportingService.GenerateObjectReportAsync(identity)
-                    : await _reportingService.GetMailboxDelegatesAsync(identity);
+                Logger.Log($"Generating {definition.Name} for '{identity}'...");
+                var report = await _reportingService.GenerateAsync(definition.Kind, identity);
+                var rows = report.Rows;
                 _exo.OperationCancellationToken.ThrowIfCancellationRequested();
                 foreach (var row in rows)
                 {
                     _reportResults.Add(row);
                 }
-
+                TextBlockReportTarget.Text = $"{report.Target.Name} ({report.Target.PrimarySmtpAddress})";
+                TextBlockReportCount.Text = $"{rows.Count} entries";
+                ReportEmptyState.Text = "No entries found";
+                ReportEmptyState.Visibility = rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
                 var warnings = rows.Count(row => row.HasWarning);
                 var title = warnings > 0 ? "Partial report" : rows.Count == 0 ? "Report complete: no entries" : "Report complete";
                 var message = warnings > 0
@@ -1517,30 +1477,28 @@ namespace EXOKit
                     : $"{identity}: {rows.Count} entries found.";
                 SetReportStatus(title, message, warnings > 0 ? InfoBarSeverity.Warning : InfoBarSeverity.Success);
                 Logger.Log($"{title}. {message}", warnings > 0 ? LogType.Warning : LogType.Success);
-                ButtonExportReportCsv.IsEnabled = rows.Count > 0;
             }
             catch (OperationCanceledException)
             {
                 _reportResults.Clear();
+                ReportEmptyState.Text = "Report cancelled";
+                ReportEmptyState.Visibility = Visibility.Visible;
                 SetReportStatus("Report cancelled", "No report was published or exported.", InfoBarSeverity.Warning);
                 throw;
             }
             catch (Exception ex)
             {
                 _reportResults.Clear();
+                ReportEmptyState.Text = "Report unavailable";
+                ReportEmptyState.Visibility = Visibility.Visible;
                 SetReportStatus("Report failed", ex.Message, InfoBarSeverity.Error);
                 Logger.Log($"Report generation failed for '{identity}': {ex.Message}", LogType.Error);
                 await ShowMessageAsync(ex.Message, "Report Generation Failed");
             }
-            finally
-            {
-                ButtonGenerateObjectReport.IsEnabled = _validatedReportTarget?.Kind == ReportTargetKind.Group;
-                ButtonGetMailboxDelegates.IsEnabled = _validatedReportTarget?.Kind == ReportTargetKind.Mailbox;
-            }
         }
 
         private async void ButtonExportReportCsv_Click(object sender, RoutedEventArgs e)
-            => await RunUiOperationAsync(ExportReportCsvAsync);
+            => await RunUiOperationAsync(ExportReportCsvAsync, readOnly: true);
 
         private async Task ExportReportCsvAsync()
         {
@@ -1553,7 +1511,8 @@ namespace EXOKit
             InitializeWithWindow.Initialize(savePicker, GetWindowHandle());
             savePicker.SuggestedStartLocation = PickerLocationId.DocumentsLibrary;
             savePicker.FileTypeChoices.Add("CSV File", new List<string> { ".csv" });
-            savePicker.SuggestedFileName = $"EXOKit_{(_reportResults.Any(row => row.HasWarning) ? "Partial_" : "")}Report_{DateTime.Now:yyyyMMdd_HHmmss}";
+            var kind = (ComboBoxReportType.SelectedItem as ReportDefinition)?.Kind.ToString() ?? "Report";
+            savePicker.SuggestedFileName = $"EXOKit_{kind}_{(_reportResults.Any(row => row.HasWarning) ? "Partial_" : "")}{DateTime.Now:yyyyMMdd_HHmmss}";
 
             var file = await savePicker.PickSaveFileAsync();
             if (file == null)

@@ -4,6 +4,7 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:local="using:EXOKit"
+    xmlns:controls="using:EXOKit.Controls"
     xmlns:services="using:EXOKit.Services"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
@@ -14,7 +15,7 @@
         <MicaBackdrop />
     </Window.SystemBackdrop>
 
-    <Grid x:Name="RootLayout" Padding="0" RequestedTheme="Dark" Background="{ThemeResource ShellCanvasBrush}">
+    <controls:PointerGrid x:Name="RootLayout" Padding="0" RequestedTheme="Dark" Background="{ThemeResource ShellCanvasBrush}">
         <Grid.Resources>
             <ResourceDictionary>
                 <ResourceDictionary.ThemeDictionaries>
@@ -120,15 +121,15 @@
                                 </Grid>
                                 <TextBlock x:Name="TextBlockGraphStatus" Text="Graph offline" FontSize="12" Foreground="{ThemeResource ShellMutedBrush}" />
                             </StackPanel>
-                            <Button x:Name="ButtonConnections" Width="32" Height="32" Padding="6" Background="Transparent"
+                            <Button x:Name="ButtonConnections" Width="32" Height="32" Padding="0" Background="Transparent"
                                     ToolTipService.ToolTip="Manage connections" AutomationProperties.Name="Manage connections">
-                                <SymbolIcon Symbol="World" />
+                                <SymbolIcon Symbol="World" Width="20" Height="20" />
                                 <Button.Flyout>
                                     <MenuFlyout>
-                                        <MenuFlyoutItem x:Name="ButtonConnectExo" Text="Connect Exchange Online" Icon="Mail" Click="ButtonConnectExo_Click" />
-                                        <MenuFlyoutItem x:Name="ButtonConnectGraph" Text="Connect Microsoft Graph" Icon="People" Click="ButtonConnectGraph_Click" IsEnabled="False" />
+                                        <controls:PointerMenuFlyoutItem x:Name="ButtonConnectExo" Text="Connect Exchange Online" Icon="Mail" Click="ButtonConnectExo_Click" />
+                                        <controls:PointerMenuFlyoutItem x:Name="ButtonConnectGraph" Text="Connect Microsoft Graph" Icon="People" Click="ButtonConnectGraph_Click" IsEnabled="False" />
                                         <MenuFlyoutSeparator />
-                                        <MenuFlyoutItem x:Name="ButtonDisconnect" Text="Disconnect All" Icon="Cancel" Click="ButtonDisconnect_Click" IsEnabled="False" />
+                                        <controls:PointerMenuFlyoutItem x:Name="ButtonDisconnect" Text="Disconnect All" Icon="Cancel" Click="ButtonDisconnect_Click" IsEnabled="False" />
                                     </MenuFlyout>
                                 </Button.Flyout>
                             </Button>
@@ -613,68 +614,106 @@
                 </Grid>
 
                 <!-- Reporting -->
-                <Grid x:Name="PanelReporting" Visibility="Collapsed">
+                <Grid x:Name="PanelReporting" Visibility="Collapsed" Padding="8" RowSpacing="16">
                     <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
-                    <StackPanel Grid.Row="0" Spacing="8" Padding="8">
-                        <TextBlock Text="Group / Distribution List / Mailbox Identity" />
-                        <TextBox x:Name="TextBoxReportingIdentity" MaxWidth="420" HorizontalAlignment="Stretch" TextChanged="TextBoxReportingIdentity_TextChanged" />
-                        <VariableSizedWrapGrid Orientation="Horizontal" ItemHeight="40" ItemWidth="210">
-                            <Button x:Name="ButtonValidateReportingIdentity" Content="Validate" Click="ButtonValidateReportingIdentity_Click" />
-                            <Button x:Name="ButtonGenerateObjectReport" Content="Get Group Report" Click="ButtonGenerateObjectReport_Click" IsEnabled="False" />
-                            <Button x:Name="ButtonGetMailboxDelegates" Content="Get Mailbox Delegates" Click="ButtonGetMailboxDelegates_Click" IsEnabled="False" />
-                            <Button x:Name="ButtonExportReportCsv" Content="Export to CSV..." Click="ButtonExportReportCsv_Click" IsEnabled="False" />
-                        </VariableSizedWrapGrid>
-                        <TextBlock x:Name="TextBlockReportingValidation" Opacity="0.7" TextWrapping="Wrap" Text="Enter an identity and click Validate to confirm its type before running a report." />
-                        <InfoBar x:Name="ReportStatus" IsOpen="True" IsClosable="False" Severity="Informational" Title="No report generated" />
-                    </StackPanel>
-                    <Border Grid.Row="1" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="4" Margin="8,0,8,8">
-                        <ListView x:Name="ListViewReportResults" SelectionMode="None">
+                    <Grid x:Name="ReportInputs" ColumnSpacing="12" RowSpacing="12">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="2*" />
+                            <ColumnDefinition Width="3*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <ComboBox x:Name="ComboBoxReportType" Grid.ColumnSpan="3" Header="Report type"
+                                  HorizontalAlignment="Stretch" DisplayMemberPath="Name" />
+                        <TextBox x:Name="TextBoxReportingIdentity" Grid.Row="1" Grid.ColumnSpan="2" Header="Target"
+                                 TextChanged="TextBoxReportingIdentity_TextChanged" KeyDown="TextBoxReportingIdentity_KeyDown" />
+                        <Button x:Name="ButtonGenerateReport" Grid.Row="1" Grid.Column="2" VerticalAlignment="Bottom"
+                                IsEnabled="False" Click="ButtonGenerateReport_Click" Style="{StaticResource AccentButtonStyle}"
+                                AutomationProperties.Name="Generate report">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <SymbolIcon Symbol="Page" />
+                                <TextBlock Text="Generate report" />
+                            </StackPanel>
+                        </Button>
+                    </Grid>
+                    <InfoBar x:Name="ReportStatus" Grid.Row="1" IsOpen="True" IsClosable="False" Severity="Informational" Title="EXO not connected" />
+                    <Grid Grid.Row="2" RowSpacing="8">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Spacing="4">
+                                <StackPanel Orientation="Horizontal" Spacing="12">
+                                    <TextBlock Text="Results" FontSize="16" FontWeight="SemiBold" />
+                                    <TextBlock x:Name="TextBlockReportCount" Text="0 entries" VerticalAlignment="Center" Opacity="0.7" />
+                                </StackPanel>
+                                <TextBlock x:Name="TextBlockReportTarget" TextWrapping="Wrap" Opacity="0.7" />
+                            </StackPanel>
+                            <Button x:Name="ButtonExportReportCsv" Grid.Column="1" VerticalAlignment="Top"
+                                    Click="ButtonExportReportCsv_Click" IsEnabled="False" AutomationProperties.Name="Export report to CSV">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <SymbolIcon Symbol="Download" />
+                                    <TextBlock Text="Export CSV" />
+                                </StackPanel>
+                            </Button>
+                        </Grid>
+                        <Border Grid.Row="1" BorderBrush="{ThemeResource ShellBorderBrush}" BorderThickness="0,1,0,1" Padding="12,8">
+                            <Grid ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="2*" />
+                                    <ColumnDefinition Width="1.2*" />
+                                    <ColumnDefinition Width="2.5*" />
+                                    <ColumnDefinition Width="1.6*" />
+                                    <ColumnDefinition Width="3*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="Object" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                <TextBlock Grid.Column="1" Text="Type" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                <TextBlock Grid.Column="2" Text="Member / Delegate" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                <TextBlock Grid.Column="3" Text="Role / Permission" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                <TextBlock Grid.Column="4" Text="Status" FontWeight="SemiBold" TextWrapping="Wrap" />
+                            </Grid>
+                        </Border>
+                        <ListView x:Name="ListViewReportResults" Grid.Row="2" SelectionMode="None" AutomationProperties.Name="Report results">
                             <ListView.ItemContainerStyle>
                                 <Style TargetType="ListViewItem">
                                     <Setter Property="HorizontalContentAlignment" Value="Stretch" />
                                 </Style>
                             </ListView.ItemContainerStyle>
-                            <ListView.HeaderTemplate>
-                                <DataTemplate>
-                                    <Grid Padding="8,4">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="2*" />
-                                            <ColumnDefinition Width="1*" />
-                                            <ColumnDefinition Width="2*" />
-                                            <ColumnDefinition Width="1.2*" />
-                                            <ColumnDefinition Width="2*" />
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Grid.Column="0" Text="Object" FontWeight="SemiBold" />
-                                        <TextBlock Grid.Column="1" Text="Type" FontWeight="SemiBold" />
-                                        <TextBlock Grid.Column="2" Text="Member / Delegate" FontWeight="SemiBold" />
-                                        <TextBlock Grid.Column="3" Text="Role / Permission" FontWeight="SemiBold" />
-                                        <TextBlock Grid.Column="4" Text="Status" FontWeight="SemiBold" />
-                                    </Grid>
-                                </DataTemplate>
-                            </ListView.HeaderTemplate>
                             <ListView.ItemTemplate>
                                 <DataTemplate x:DataType="services:ReportRow">
-                                    <Grid Padding="8,2">
+                                    <Grid Padding="0,8" ColumnSpacing="12">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="2*" />
-                                            <ColumnDefinition Width="1*" />
-                                            <ColumnDefinition Width="2*" />
                                             <ColumnDefinition Width="1.2*" />
-                                            <ColumnDefinition Width="2*" />
+                                            <ColumnDefinition Width="2.5*" />
+                                            <ColumnDefinition Width="1.6*" />
+                                            <ColumnDefinition Width="3*" />
                                         </Grid.ColumnDefinitions>
-                                        <TextBlock Grid.Column="0" Text="{x:Bind ObjectName}" TextWrapping="Wrap" Margin="0,0,8,0" />
-                                        <TextBlock Grid.Column="1" Text="{x:Bind ObjectType}" TextWrapping="Wrap" Margin="0,0,8,0" />
-                                        <TextBlock Grid.Column="2" Text="{x:Bind MemberOrDelegate}" TextWrapping="Wrap" Margin="0,0,8,0" />
-                                        <TextBlock Grid.Column="3" Text="{x:Bind RoleOrPermission}" TextWrapping="Wrap" Margin="0,0,8,0" />
-                                        <TextBlock Grid.Column="4" Text="{x:Bind Status}" TextWrapping="Wrap" />
+                                        <TextBlock Text="{x:Bind ObjectName}" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+                                        <TextBlock Grid.Column="1" Text="{x:Bind ObjectType}" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+                                        <TextBlock Grid.Column="2" Text="{x:Bind MemberOrDelegate}" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+                                        <TextBlock Grid.Column="3" Text="{x:Bind RoleOrPermission}" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+                                        <TextBlock Grid.Column="4" Text="{x:Bind Status}" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
                                     </Grid>
                                 </DataTemplate>
                             </ListView.ItemTemplate>
                         </ListView>
-                    </Border>
+                        <TextBlock x:Name="ReportEmptyState" Grid.Row="2" Text="No report generated" Opacity="0.6"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False" />
+                    </Grid>
                 </Grid>
 
                 <!-- Snapshots -->
@@ -798,13 +837,14 @@
                 </ContentControl>
 
                 <!-- Output: Log / Ticket Notes -->
-                <Grid Grid.Row="2" Margin="0,12,0,0">
+                <Grid x:Name="OutputPanel" Grid.Row="2" Margin="0,12,0,0">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
-                    <Thumb x:Name="OutputResizeHandle" Height="12" DragDelta="OutputResizeHandle_DragDelta"
+                    <controls:OutputResizeGrip>
+                    <Thumb x:Name="OutputResizeHandle" Height="16" DragDelta="OutputResizeHandle_DragDelta"
                            KeyDown="OutputResizeHandle_KeyDown" IsTabStop="True" UseSystemFocusVisuals="True"
                            AutomationProperties.Name="Resize output panel"
                            ToolTipService.ToolTip="Resize output panel. Drag, or focus and use the Up and Down arrow keys.">
@@ -817,6 +857,7 @@
                             </ControlTemplate>
                         </Thumb.Template>
                     </Thumb>
+                    </controls:OutputResizeGrip>
                     <Grid Grid.Row="1" Margin="0,4,0,0" ColumnSpacing="12">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
@@ -876,5 +917,5 @@
                 </Grid>
             </Grid>
         </NavigationView>
-    </Grid>
+    </controls:PointerGrid>
 </Window>

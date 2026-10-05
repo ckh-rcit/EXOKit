@@ -8,6 +8,31 @@ namespace EXOKit.Tests;
 public sealed class WorkflowTests
 {
     [Theory]
+    [InlineData(ReportKind.GroupMembership, "SharedMailbox", "requires a group")]
+    [InlineData(ReportKind.MailboxPermissions, "MailUniversalDistributionGroup", "requires a mailbox")]
+    public async Task ReportingSelectionRejectsWrongTargetBeforeReadingReport(ReportKind kind, string recipientType, string expected)
+    {
+        using var runspace = CreateRunspace("""
+            function Get-Recipient { [CmdletBinding()] param($Identity, $RecipientTypeDetails)
+                [pscustomobject]@{ Name = 'Target'; Identity = 'canonical-target'; PrimarySmtpAddress = 'target@example.org'; RecipientTypeDetails = $global:TargetType }
+            }
+            function Get-Mailbox { throw 'Report read must not start' }
+            function Get-DistributionGroupMember { throw 'Report read must not start' }
+            """);
+        runspace.SessionStateProxy.SetVariable("TargetType", recipientType);
+        var exo = new ExoPowerShellService(runspace);
+        try
+        {
+            var service = new ReportingService(exo);
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => service.GenerateAsync(kind, "target@example.org"));
+            Assert.Contains(expected, error.Message);
+            await Assert.ThrowsAsync<ArgumentException>(() => service.GenerateAsync(kind, " "));
+            await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => service.GenerateAsync((ReportKind)999, "target@example.org"));
+        }
+        finally { await exo.ShutdownAsync(); }
+    }
+
+    [Theory]
     [InlineData("found")]
     [InlineData("absent")]
     [InlineData("denied")]
@@ -346,7 +371,9 @@ public sealed class WorkflowTests
         var exo = new ExoPowerShellService(runspace);
         try
         {
-            var rows = await new ReportingService(exo).GetMailboxDelegatesAsync("mailbox@example.org");
+            var report = await new ReportingService(exo).GenerateAsync(ReportKind.MailboxPermissions, "mailbox@example.org");
+            Assert.Equal(ReportTargetKind.Mailbox, report.Target.Kind);
+            var rows = report.Rows;
             Assert.Contains(rows, row => row.MemberOrDelegate == "full@example.org" && !row.HasWarning);
             Assert.Contains(rows, row => row.MemberOrDelegate == "known@example.org" && !row.HasWarning);
             Assert.Contains(rows, row => row.MemberOrDelegate == "deleted-delegate" && row.HasWarning);
@@ -391,7 +418,9 @@ public sealed class WorkflowTests
         var exo = new ExoPowerShellService(runspace);
         try
         {
-            var rows = await new ReportingService(exo).GenerateObjectReportAsync("group");
+            var report = await new ReportingService(exo).GenerateAsync(ReportKind.GroupMembership, "group");
+            Assert.Equal(ReportTargetKind.Group, report.Target.Kind);
+            var rows = report.Rows;
             Assert.Contains(rows, row => row.MemberOrDelegate == "deleted-owner" && row.HasWarning);
             Assert.Contains(rows, row => row.RoleOrPermission == "Member" && !row.HasWarning);
         }

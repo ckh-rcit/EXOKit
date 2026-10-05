@@ -92,6 +92,23 @@ Cancel retains completed directory results and marks unchecked mailboxes. Editin
 or search options, disconnecting, or saving connection settings clears old results.
 Search and mailbox checks make no directory changes. Entra Scout remains a separate, unchanged app.
 
+### Reporting
+
+Choose Group membership and owners or Mailbox permissions, enter the target identity, then
+select Generate report or press Enter. Target validation runs automatically and rejects an
+incompatible recipient type before reading the report. The results area shows the resolved
+target, entry count, and per-entry status. Export CSV saves the current result with its report
+type in the filename; partial reports retain their warnings.
+
+Changing the report type, target, or connected EXO tenant clears the previous result and disables
+export. Available report types and their target requirements are defined in
+`ReportingService.ReportTypes`; both types share the results and export workflow.
+
+The Log / Ticket Notes area is hidden on Settings, User Search, and Reporting. Logs continue
+to be collected. Operational pages restore its previous height and collapsed state; the divider
+supports dragging and Up/Down keys. Clickable controls use a hand cursor, and the divider uses
+the native vertical-resize cursor.
+
 ## Configuration
 
 The package includes only the sanitized sample configuration. Runtime settings are stored at
@@ -227,7 +244,7 @@ and an "Unresolved" status. An unreadable mailbox permission section gets an "Un
 readable sections remain in the report. These report-only fallbacks do not relax mutation checks.
 
 Mailbox permission reports resolve the target's primary SMTP address before querying and reject
-returned identities outside that recipient's known identifiers. Changing or validating a target,
+returned identities outside that recipient's known identifiers. Changing the report type or target,
 or starting another report, clears the previous results and disables export. The report banner
 distinguishes complete, empty, partial, failed, and cancelled results. Partial CSV exports have
 "Partial" in the suggested filename and include the same Status details as the table.
