@@ -5,6 +5,12 @@ internal static class PowerShellPrerequisites
     internal const string Script = """
         $ErrorActionPreference = 'Stop'
         if ($PSVersionTable.PSVersion -lt [version]'7.6.0') { throw 'Update the application: EXO 3.10.1 requires embedded PowerShell 7.6 or later.' }
+        $documents = [Environment]::GetFolderPath([Environment+SpecialFolder]::MyDocuments)
+        if ([string]::IsNullOrWhiteSpace($documents)) { throw 'The CurrentUser Documents directory is unavailable. Cannot prepare PowerShell modules.' }
+        $userModules = Join-Path $documents 'PowerShell\Modules'
+        if (($env:PSModulePath -split [IO.Path]::PathSeparator) -notcontains $userModules) {
+            $env:PSModulePath = $userModules + [IO.Path]::PathSeparator + $env:PSModulePath
+        }
         $manager = Get-Module -ListAvailable Microsoft.PowerShell.PSResourceGet |
             Where-Object Version -GE ([version]'1.2.0') | Sort-Object Version -Descending | Select-Object -First 1
         if (-not $manager) {
