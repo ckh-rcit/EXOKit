@@ -70,6 +70,7 @@
                     <NavigationViewItem x:Name="NavItemBookings" Content="Bookings" Tag="Bookings" Icon="Calendar" />
                     <NavigationViewItemSeparator />
                     <NavigationViewItem x:Name="NavItemRecipientLookup" Content="Recipient Lookup" Tag="RecipientLookup" Icon="Find" />
+                    <NavigationViewItem x:Name="NavItemUserSearch" Content="User Search" Tag="UserSearch" Icon="Contact" />
                     <NavigationViewItem x:Name="NavItemReporting" Content="Reporting" Tag="Reporting" Icon="Page" />
                     <NavigationViewItem x:Name="NavItemSnapshots" Content="Snapshots" Tag="Snapshots" Icon="Clock" />
                     <NavigationViewItem x:Name="NavItemSettings" Content="Settings" Tag="Settings" Icon="Setting" />
@@ -503,6 +504,107 @@
                                         </Grid.ColumnDefinitions>
                                         <TextBlock Text="{x:Bind Identity}" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
                                         <TextBlock Grid.Column="1" Text="{x:Bind DisplayType}" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ListView.ItemTemplate>
+                        </ListView>
+                    </Grid>
+                </Grid>
+
+                <Grid x:Name="PanelUserSearch" Padding="8" RowSpacing="8" Visibility="Collapsed">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="TextBoxUserSearch" Header="Name, employee ID, UPN, email, or SAM account"
+                                 KeyDown="TextBoxUserSearch_KeyDown" />
+                        <Button x:Name="ButtonUserSearch" Grid.Column="1" VerticalAlignment="Bottom" IsEnabled="False" Click="ButtonUserSearch_Click"
+                            AutomationProperties.Name="Search users">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <SymbolIcon Symbol="Find" />
+                                <TextBlock Text="Search" />
+                            </StackPanel>
+                        </Button>
+                    </Grid>
+                    <Grid Grid.Row="1">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <VariableSizedWrapGrid Orientation="Horizontal" ItemHeight="40" ItemWidth="200">
+                            <CheckBox x:Name="CheckBoxUserSearchDeleted" Content="Include deleted users" />
+                            <CheckBox x:Name="CheckBoxUserSearchMailboxes" Content="Check EXO mailboxes" IsChecked="True" />
+                        </VariableSizedWrapGrid>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                            <Button x:Name="ButtonUserSearchDetails" Click="ButtonUserSearchDetails_Click" IsEnabled="False"
+                                    ToolTipService.ToolTip="View selected user details" AutomationProperties.Name="View selected user details">
+                                <SymbolIcon Symbol="ContactInfo" />
+                            </Button>
+                            <Button x:Name="ButtonCopyUserSearch" Click="ButtonCopyUserSearch_Click" IsEnabled="False"
+                                    ToolTipService.ToolTip="Copy selected user details" AutomationProperties.Name="Copy selected user details">
+                                <SymbolIcon Symbol="Copy" />
+                            </Button>
+                        </StackPanel>
+                    </Grid>
+                    <InfoBar x:Name="UserSearchStatus" Grid.Row="2" IsOpen="True" IsClosable="False" Severity="Informational" Title="Graph not connected" />
+                    <Grid Grid.Row="3" RowSpacing="4">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <Grid Padding="12,4" ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="3*" />
+                                <ColumnDefinition Width="1.5*" />
+                                <ColumnDefinition Width="2*" />
+                                <ColumnDefinition Width="1*" />
+                                <ColumnDefinition Width="1.5*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="User / UPN" FontWeight="SemiBold" TextWrapping="Wrap" />
+                            <TextBlock Grid.Column="1" Text="Employee / SAM" FontWeight="SemiBold" TextWrapping="Wrap" />
+                            <TextBlock Grid.Column="2" Text="Department / Job" FontWeight="SemiBold" TextWrapping="Wrap" />
+                            <TextBlock Grid.Column="3" Text="Account" FontWeight="SemiBold" TextWrapping="Wrap" />
+                            <TextBlock Grid.Column="4" Text="EXO Mailbox" FontWeight="SemiBold" TextWrapping="Wrap" />
+                        </Grid>
+                        <ListView x:Name="ListViewUserSearch" Grid.Row="1" SelectionMode="Single"
+                                  SelectionChanged="ListViewUserSearch_SelectionChanged" DoubleTapped="ListViewUserSearch_DoubleTapped"
+                                  KeyDown="ListViewUserSearch_KeyDown" AutomationProperties.Name="User search results">
+                            <ListView.ItemContainerStyle>
+                                <Style TargetType="ListViewItem">
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                </Style>
+                            </ListView.ItemContainerStyle>
+                            <ListView.ItemTemplate>
+                                <DataTemplate x:DataType="services:UserSearchResult">
+                                    <Grid Padding="0,8" ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="3*" />
+                                            <ColumnDefinition Width="1.5*" />
+                                            <ColumnDefinition Width="2*" />
+                                            <ColumnDefinition Width="1*" />
+                                            <ColumnDefinition Width="1.5*" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Spacing="4">
+                                            <TextBlock Text="{x:Bind DisplayName}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                            <TextBlock Text="{x:Bind UserPrincipalName}" Opacity="0.7" TextWrapping="Wrap" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Spacing="4">
+                                            <TextBlock Text="{x:Bind EmployeeId}" TextWrapping="Wrap" />
+                                            <TextBlock Text="{x:Bind SamAccountName}" Opacity="0.7" TextWrapping="Wrap" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2" Spacing="4">
+                                            <TextBlock Text="{x:Bind Department}" TextWrapping="Wrap" />
+                                            <TextBlock Text="{x:Bind JobTitle}" Opacity="0.7" TextWrapping="Wrap" />
+                                        </StackPanel>
+                                        <TextBlock Grid.Column="3" Text="{x:Bind AccountStatus}" TextWrapping="Wrap" />
+                                        <TextBlock Grid.Column="4" Text="{x:Bind ExoMailbox, Mode=OneWay}" TextWrapping="Wrap" />
                                     </Grid>
                                 </DataTemplate>
                             </ListView.ItemTemplate>

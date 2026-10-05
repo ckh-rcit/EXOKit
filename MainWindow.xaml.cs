@@ -55,6 +55,8 @@ namespace EXOKit
         private ServiceNowService? _serviceNowService;
         private readonly ObservableCollection<ReportRow> _reportResults = new();
         private readonly ObservableCollection<RecipientCheckResult> _recipientCheckResults = new();
+        private readonly ObservableCollection<UserSearchResult> _userSearchResults = new();
+        private string? _userSearchTenantId;
         private double _lastExpandedOutputHeight = 220;
         private bool _outputCollapsed;
         private bool _showWarnings = true;
@@ -96,6 +98,12 @@ namespace EXOKit
 
             ListViewReportResults.ItemsSource = _reportResults;
             ListViewRecipientResults.ItemsSource = _recipientCheckResults;
+            ListViewUserSearch.ItemsSource = _userSearchResults;
+            TextBoxUserSearch.TextChanged += (_, _) => ResetUserSearch();
+            CheckBoxUserSearchDeleted.Checked += (_, _) => ResetUserSearch();
+            CheckBoxUserSearchDeleted.Unchecked += (_, _) => ResetUserSearch();
+            CheckBoxUserSearchMailboxes.Checked += (_, _) => ResetUserSearch();
+            CheckBoxUserSearchMailboxes.Unchecked += (_, _) => ResetUserSearch();
             ListViewSnapshots.ItemsSource = _snapshotItems;
 
             LoadSettingsIntoUi();
@@ -140,7 +148,7 @@ namespace EXOKit
             }
         }
 
-        private async Task RunUiOperationAsync(Func<Task> operation)
+        private async Task RunUiOperationAsync(Func<Task> operation, bool readOnly = false)
         {
             if (_operationInProgress) return;
             _operationInProgress = true;
@@ -160,11 +168,13 @@ namespace EXOKit
             }
             catch (OperationCanceledException)
             {
-                Logger.Log("Operation cancelled. Applied changes are not rolled back; review results and recovery snapshots before retrying.", LogType.Warning);
+                Logger.Log(readOnly ? "Read-only operation cancelled. No directory changes were made."
+                    : "Operation cancelled. Applied changes are not rolled back; review results and recovery snapshots before retrying.", LogType.Warning);
             }
             catch (Exception exception)
             {
-                Logger.Log($"Operation stopped: {exception.Message}. Review applied changes before retrying.", LogType.Error);
+                Logger.Log(readOnly ? $"Read-only operation stopped: {exception.Message}"
+                    : $"Operation stopped: {exception.Message}. Review applied changes before retrying.", LogType.Error);
                 await ShowMessageAsync(exception.Message, "Operation Failed");
             }
             finally
@@ -437,6 +447,7 @@ namespace EXOKit
             PanelGroupSettings.Visibility = Visibility.Collapsed;
             PanelBookings.Visibility = Visibility.Collapsed;
             PanelRecipientLookup.Visibility = Visibility.Collapsed;
+            PanelUserSearch.Visibility = Visibility.Collapsed;
             PanelReporting.Visibility = Visibility.Collapsed;
             PanelSnapshots.Visibility = Visibility.Collapsed;
             PanelSettings.Visibility = Visibility.Collapsed;
@@ -471,6 +482,9 @@ namespace EXOKit
                     break;
                 case "RecipientLookup":
                     PanelRecipientLookup.Visibility = Visibility.Visible;
+                    break;
+                case "UserSearch":
+                    PanelUserSearch.Visibility = Visibility.Visible;
                     break;
                 case "Reporting":
                     PanelReporting.Visibility = Visibility.Visible;
@@ -567,6 +581,11 @@ namespace EXOKit
             ButtonConnectGraph.IsEnabled = _exo.IsConnected && !_authService.IsGraphConnected;
             ButtonConnectExo.IsEnabled = !_exo.IsConnected;
             ButtonDisconnect.IsEnabled = _exo.IsConnected || _authService.IsGraphConnected;
+            if (!_authService.IsGraphConnected || (_userSearchTenantId != null && !string.Equals(_userSearchTenantId, _authService.ConnectedTenantId, StringComparison.OrdinalIgnoreCase)))
+                ResetUserSearch();
+            else if (_userSearchTenantId == null)
+                SetUserSearchStatus("Ready to search", "", InfoBarSeverity.Informational);
+            UpdateUserSearchControls();
         }
 
         // --- Connection handlers ---
@@ -1196,6 +1215,156 @@ namespace EXOKit
                 ButtonCopyRecipientResults.Visibility = _recipientCheckResults.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
                 ButtonCheckRecipient.IsEnabled = true;
             }
+        }
+
+        private void ResetUserSearch()
+        {
+            _userSearchResults.Clear();
+            _userSearchTenantId = null;
+            SetUserSearchStatus(_authService.IsGraphConnected ? "Ready to search" : "Graph not connected", "", InfoBarSeverity.Informational);
+            UpdateUserSearchControls();
+        }
+
+        private void UpdateUserSearchControls()
+        {
+            ButtonUserSearch.IsEnabled = !_operationInProgress && _authService.IsGraphConnected && !string.IsNullOrWhiteSpace(TextBoxUserSearch.Text);
+            var selected = !_operationInProgress && ListViewUserSearch.SelectedItem is UserSearchResult;
+            ButtonUserSearchDetails.IsEnabled = selected;
+            ButtonCopyUserSearch.IsEnabled = selected;
+        }
+
+        private void SetUserSearchStatus(string title, string message, InfoBarSeverity severity)
+        {
+            UserSearchStatus.Title = title;
+            UserSearchStatus.Message = message;
+            UserSearchStatus.Severity = severity;
+            UserSearchStatus.IsOpen = true;
+        }
+
+        private async void ButtonUserSearch_Click(object sender, RoutedEventArgs e) =>
+            await RunUiOperationAsync(SearchUsersAsync, readOnly: true);
+
+        private async void TextBoxUserSearch_KeyDown(object sender, KeyRoutedEventArgs e)
+        {
+            if (e.Key != Windows.System.VirtualKey.Enter || !ButtonUserSearch.IsEnabled) return;
+            e.Handled = true;
+            await RunUiOperationAsync(SearchUsersAsync, readOnly: true);
+        }
+
+        private async Task SearchUsersAsync()
+        {
+            ResetUserSearch();
+            if (!_authService.IsGraphConnected) throw new InvalidOperationException("Connect to Microsoft Graph before searching users.");
+            var checkMailboxes = CheckBoxUserSearchMailboxes.IsChecked == true;
+            if (checkMailboxes && (!_exo.IsConnected || !string.Equals(_exo.ConnectedTenantId, _authService.ConnectedTenantId, StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException("Mailbox checks require EXO and Graph connections to the same tenant.");
+            _userSearchTenantId = _authService.ConnectedTenantId;
+            var cancellationToken = _authService.OperationCancellationToken;
+            SetUserSearchStatus("Searching users", "Reading directory results...", InfoBarSeverity.Informational);
+            try
+            {
+                var users = await _graphService.SearchUsersAsync(TextBoxUserSearch.Text, CheckBoxUserSearchDeleted.IsChecked == true,
+                    message => SetUserSearchStatus("Searching users", message, InfoBarSeverity.Informational));
+                cancellationToken.ThrowIfCancellationRequested();
+                foreach (var user in users)
+                {
+                    if (user.IsDeleted) user.SetMailboxStatus("Not checked (deleted)", "Mailbox retention is not evaluated for deleted directory users.");
+                    else if (!checkMailboxes) user.SetMailboxStatus("Not requested");
+                    _userSearchResults.Add(user);
+                }
+                var failures = 0;
+                var active = users.Where(user => !user.IsDeleted).ToArray();
+                if (checkMailboxes)
+                {
+                    for (var index = 0; index < active.Length; index++)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        var user = active[index];
+                        SetUserSearchStatus("Checking EXO mailboxes", $"{users.Count} users found; mailbox {index + 1} of {active.Length}.", InfoBarSeverity.Informational);
+                        user.SetMailboxStatus("Checking...");
+                        try
+                        {
+                            var mailboxType = await _exo.GetUserMailboxTypeAsync(user.ObjectId);
+                            user.SetMailboxStatus(mailboxType == null ? "Not found" : $"Yes ({mailboxType})",
+                                mailboxType == null ? "No active mailbox returned within the connected account's Exchange scope." : "");
+                        }
+                        catch (OperationCanceledException) { throw; }
+                        catch (Exception exception)
+                        {
+                            failures++;
+                            user.SetMailboxStatus("Unknown (lookup failed)", exception.Message);
+                            Logger.Log($"Mailbox lookup failed for {user.UserPrincipalName}: {exception.Message}", LogType.Warning);
+                        }
+                    }
+                }
+                cancellationToken.ThrowIfCancellationRequested();
+                var title = users.Count == 0 ? "No users found" : failures > 0 ? "Search complete with mailbox warnings" : "Search complete";
+                var message = $"{users.Count} users; {users.Count(user => user.IsDeleted)} deleted."
+                    + (failures > 0 ? $" {failures} mailbox checks failed; status is unknown. Details are available on each user." : "");
+                SetUserSearchStatus(title, message, failures > 0 ? InfoBarSeverity.Warning : InfoBarSeverity.Success);
+                Logger.Log($"{title}: {message}", failures > 0 ? LogType.Warning : LogType.Success);
+            }
+            catch (OperationCanceledException)
+            {
+                foreach (var user in _userSearchResults.Where(user => user.ExoMailbox is "Not checked" or "Checking..."))
+                    user.SetMailboxStatus("Not checked (cancelled)");
+                SetUserSearchStatus("Search cancelled", $"{_userSearchResults.Count} directory results retained. Mailbox checks may be incomplete.", InfoBarSeverity.Warning);
+                throw;
+            }
+            catch (Exception exception)
+            {
+                _userSearchResults.Clear();
+                SetUserSearchStatus("Search failed", exception.Message, InfoBarSeverity.Error);
+                throw;
+            }
+        }
+
+        private void ListViewUserSearch_SelectionChanged(object sender, SelectionChangedEventArgs e) => UpdateUserSearchControls();
+
+        private async void ListViewUserSearch_DoubleTapped(object sender, DoubleTappedRoutedEventArgs e) =>
+            await RunUiOperationAsync(ShowUserSearchDetailsAsync, readOnly: true);
+
+        private async void ListViewUserSearch_KeyDown(object sender, KeyRoutedEventArgs e)
+        {
+            if (e.Key != Windows.System.VirtualKey.Enter || ListViewUserSearch.SelectedItem is not UserSearchResult) return;
+            e.Handled = true;
+            await RunUiOperationAsync(ShowUserSearchDetailsAsync, readOnly: true);
+        }
+
+        private async void ButtonUserSearchDetails_Click(object sender, RoutedEventArgs e) =>
+            await RunUiOperationAsync(ShowUserSearchDetailsAsync, readOnly: true);
+
+        private async Task ShowUserSearchDetailsAsync()
+        {
+            if (ListViewUserSearch.SelectedItem is not UserSearchResult user) return;
+            var dialog = new ContentDialog
+            {
+                XamlRoot = Content.XamlRoot,
+                Title = "User details",
+                Content = new ScrollViewer
+                {
+                    MaxHeight = 440,
+                    Content = new TextBlock { Text = user.Details, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true }
+                },
+                PrimaryButtonText = "Copy details",
+                CloseButtonText = "Close"
+            };
+            if (await dialog.ShowAsync() == ContentDialogResult.Primary) CopyUserSearchDetails(user);
+        }
+
+        private async void ButtonCopyUserSearch_Click(object sender, RoutedEventArgs e) =>
+            await RunUiOperationAsync(() =>
+            {
+                if (ListViewUserSearch.SelectedItem is UserSearchResult user) CopyUserSearchDetails(user);
+                return Task.CompletedTask;
+            }, readOnly: true);
+
+        private static void CopyUserSearchDetails(UserSearchResult user)
+        {
+            var data = new DataPackage();
+            data.SetText(user.Details);
+            Clipboard.SetContent(data);
+            Logger.Log("Copied selected user details.", LogType.Success);
         }
 
         // --- Reporting ---

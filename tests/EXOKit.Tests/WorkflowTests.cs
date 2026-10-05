@@ -7,6 +7,63 @@ namespace EXOKit.Tests;
 
 public sealed class WorkflowTests
 {
+    [Theory]
+    [InlineData("found")]
+    [InlineData("absent")]
+    [InlineData("denied")]
+    [InlineData("mismatch")]
+    [InlineData("unreadable")]
+    [InlineData("ambiguous")]
+    public async Task UserSearchMailboxLookupIsScopedAndFailsClosed(string scenario)
+    {
+        using var runspace = CreateRunspace("""
+            function Get-EXOMailbox { [CmdletBinding()] param([Guid]$ExternalDirectoryObjectId)
+                if ($ExternalDirectoryObjectId -eq [Guid]::Empty) { throw 'Unscoped query' }
+                switch ($global:Scenario) {
+                    'absent' { $PSCmdlet.WriteError([Management.Automation.ErrorRecord]::new([Exception]::new('Missing mailbox'), 'ManagementObjectNotFoundException', [Management.Automation.ErrorCategory]::ObjectNotFound, $ExternalDirectoryObjectId)); return }
+                    'denied' { throw 'Access denied' }
+                    'mismatch' { [pscustomobject]@{ ExternalDirectoryObjectId = [Guid]::NewGuid(); RecipientTypeDetails = 'UserMailbox' }; return }
+                    'unreadable' { [pscustomobject]@{ ExternalDirectoryObjectId = $ExternalDirectoryObjectId }; return }
+                    'ambiguous' { [pscustomobject]@{ ExternalDirectoryObjectId = $ExternalDirectoryObjectId; RecipientTypeDetails = 'UserMailbox' } }
+                }
+                [pscustomobject]@{ ExternalDirectoryObjectId = $ExternalDirectoryObjectId; RecipientTypeDetails = 'SharedMailbox' }
+            }
+            """);
+        runspace.SessionStateProxy.SetVariable("Scenario", scenario);
+        var exo = new ExoPowerShellService(runspace);
+        try
+        {
+            var objectId = Guid.NewGuid().ToString();
+            if (scenario == "found") Assert.Equal("SharedMailbox", await exo.GetUserMailboxTypeAsync(objectId));
+            else if (scenario == "absent") Assert.Null(await exo.GetUserMailboxTypeAsync(objectId));
+            else await Assert.ThrowsAnyAsync<Exception>(() => exo.GetUserMailboxTypeAsync(objectId));
+            await Assert.ThrowsAsync<ArgumentException>(() => exo.GetUserMailboxTypeAsync(""));
+        }
+        finally { await exo.ShutdownAsync(); }
+    }
+
+    [Theory]
+    [InlineData("person@example.org", "userPrincipalName eq 'person@example.org' or mail eq 'person@example.org'", null)]
+    [InlineData("12345", "employeeId eq 'E12345'", "employeeId eq '12345'")]
+    [InlineData("e12345", "employeeId eq 'E12345'", null)]
+    [InlineData("O'Neil", "onPremisesSamAccountName eq 'O''Neil'", null)]
+    [InlineData("Smith, Jane", "startswith(displayName,'Jane Smith')", null)]
+    [InlineData(" Jane   Smith ", "startswith(displayName,'Smith, Jane')", null)]
+    public void UserSearchPreservesScoutIdentifiers(string query, string expectedFilter, string? fallback)
+    {
+        var parsed = Assert.IsType<ParsedSearchQuery>(SearchQueryParser.Parse(query));
+        Assert.Contains(expectedFilter, parsed.Filter);
+        Assert.Equal(fallback, parsed.FallbackFilter);
+    }
+
+    [Fact]
+    public void UserSearchDoesNotTurnEmptyInputIntoDirectoryEnumeration()
+    {
+        Assert.Null(SearchQueryParser.Parse("  "));
+        Assert.Throws<ArgumentException>(() => SearchQueryParser.Parse(","));
+        Assert.Throws<ArgumentException>(() => SearchQueryParser.Parse("Smith,"));
+    }
+
     [Fact]
     public void HostedRuntimeLoadsBundledCoreCommandsWithOnlyDesktopModulePaths()
     {
@@ -562,18 +619,87 @@ public sealed class WorkflowTests
         finally { await exo.ShutdownAsync(); if (Directory.Exists(directory)) Directory.Delete(directory, true); }
     }
 
-    private sealed class GraphHandler(string response) : HttpMessageHandler
+    private sealed class GraphHandler(params string[] responses) : HttpMessageHandler
     {
         public string? Request { get; private set; }
+        public List<string> Requests { get; } = new();
+        public List<bool> EventualHeaders { get; } = new();
+        public System.Net.HttpStatusCode StatusCode { get; init; } = System.Net.HttpStatusCode.OK;
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Request = Uri.UnescapeDataString(request.RequestUri!.ToString());
-            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            Requests.Add(Request);
+            EventualHeaders.Add(request.Headers.TryGetValues("ConsistencyLevel", out var values) && values.Contains("eventual"));
+            return Task.FromResult(new HttpResponseMessage(StatusCode)
             {
-                Content = new StringContent(response, System.Text.Encoding.UTF8, "application/json")
+                Content = new StringContent(responses[Math.Min(Requests.Count - 1, responses.Length - 1)], System.Text.Encoding.UTF8, "application/json")
             });
         }
+    }
+
+    [Fact]
+    public async Task UserSearchReadsAllPagesAndPreservesDeletedAndUnknownAccountState()
+    {
+        using var handler = new GraphHandler(
+            """{"value":[{"id":"one","displayName":"Zoe","accountEnabled":true}],"@odata.nextLink":"https://graph.microsoft.com/v1.0/users?$skiptoken=next"}""",
+            """{"value":[{"id":"two","displayName":"Amy","employeeId":"E123","onPremisesSamAccountName":"amy","businessPhones":["111","222"]}]}""",
+            """{"value":[{"id":"deleted","displayName":"Deleted user"}],"@odata.nextLink":"https://graph.microsoft.com/v1.0/directory/deletedItems/microsoft.graph.user?$skiptoken=next"}""",
+            """{"value":[{"id":"deleted-two","displayName":"Former user"}]}""");
+        using var http = new HttpClient(handler);
+        using var client = new Microsoft.Graph.GraphServiceClient(http, new Microsoft.Kiota.Abstractions.Authentication.AnonymousAuthenticationProvider());
+        var service = new GraphService(new AuthService(Array.Empty<string>(), () => IntPtr.Zero, "", ""), client);
+        var results = await service.SearchUsersAsync("Amy", true);
+        Assert.Equal(4, results.Count);
+        Assert.Equal("Amy", results[0].DisplayName);
+        Assert.Equal("Unknown", results[0].AccountStatus);
+        Assert.Equal("111; 222", results[0].BusinessPhone);
+        Assert.Equal(2, results.Count(user => user.IsDeleted));
+        Assert.All(handler.EventualHeaders, Assert.True);
+        Assert.Contains("$count=true", handler.Requests[0]);
+        Assert.Contains("$skiptoken=next", handler.Requests[1]);
+        Assert.Contains("deletedItems/graph.user", handler.Requests[2]);
+    }
+
+    [Fact]
+    public async Task UserSearchRetriesNumericEmployeeIdSeparatelyForActiveAndDeletedUsers()
+    {
+        using var handler = new GraphHandler("""{"value":[]}""", """{"value":[{"id":"active"}]}""", """{"value":[]}""", """{"value":[{"id":"deleted"}]}""");
+        using var http = new HttpClient(handler);
+        using var client = new Microsoft.Graph.GraphServiceClient(http, new Microsoft.Kiota.Abstractions.Authentication.AnonymousAuthenticationProvider());
+        var service = new GraphService(new AuthService(Array.Empty<string>(), () => IntPtr.Zero, "", ""), client);
+        Assert.Equal(2, (await service.SearchUsersAsync("123", true)).Count);
+        Assert.Contains("employeeId eq 'E123'", handler.Requests[0]);
+        Assert.Contains("employeeId eq '123'", handler.Requests[1]);
+        Assert.Contains("employeeId eq 'E123'", handler.Requests[2]);
+        Assert.Contains("employeeId eq '123'", handler.Requests[3]);
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("{\"value\":[{}]}")]
+    public async Task UserSearchRejectsUnreadableResponses(string response)
+    {
+        using var handler = new GraphHandler(response);
+        using var http = new HttpClient(handler);
+        using var client = new Microsoft.Graph.GraphServiceClient(http, new Microsoft.Kiota.Abstractions.Authentication.AnonymousAuthenticationProvider());
+        var service = new GraphService(new AuthService(Array.Empty<string>(), () => IntPtr.Zero, "", ""), client);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.SearchUsersAsync("Amy"));
+    }
+
+    [Fact]
+    public async Task UserSearchPropagatesPermissionErrorsAndCancellation()
+    {
+        using var handler = new GraphHandler("""{"error":{"code":"Authorization_RequestDenied","message":"Insufficient privileges"}}""")
+            { StatusCode = System.Net.HttpStatusCode.Forbidden };
+        using var http = new HttpClient(handler);
+        using var client = new Microsoft.Graph.GraphServiceClient(http, new Microsoft.Kiota.Abstractions.Authentication.AnonymousAuthenticationProvider());
+        var auth = new AuthService(Array.Empty<string>(), () => IntPtr.Zero, "", "");
+        var service = new GraphService(auth, client);
+        await Assert.ThrowsAsync<Microsoft.Graph.Models.ODataErrors.ODataError>(() => service.SearchUsersAsync("Amy", true));
+        auth.OperationCancellationToken = new CancellationToken(true);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.SearchUsersAsync("Amy"));
+        Assert.Single(handler.Requests);
     }
 
     [Fact]

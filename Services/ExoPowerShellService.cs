@@ -289,6 +289,26 @@ namespace EXOKit.Services
         public async Task<string> GetRecipientTypeAsync(string identity) =>
             (await GetRecipientAsync(identity))?.RecipientTypeDetails ?? "Not Found";
 
+        public Task<string?> GetUserMailboxTypeAsync(string objectId) => RunOnStaThreadAsync(() =>
+        {
+            if (!Guid.TryParse(objectId, out var directoryId) || directoryId == Guid.Empty)
+                throw new ArgumentException("A valid directory object ID is required for the mailbox lookup.", nameof(objectId));
+            using var ps = PowerShell.Create();
+            ps.Runspace = _runspace;
+            ps.AddCommand("Get-EXOMailbox").AddParameter("ExternalDirectoryObjectId", directoryId).AddParameter("ErrorAction", "Continue");
+            var results = InvokePipeline(ps);
+            if (ps.HadErrors && ps.Streams.Error.Count > 0 && ps.Streams.Error.All(IsMissingRecipient) && results.Count == 0) return null;
+            if (ps.HadErrors) throw BuildPipelineException(ps);
+            if (results.Count == 0) return null;
+            if (results.Count != 1) throw new InvalidOperationException("Mailbox lookup returned more than one object. Status is unknown.");
+            var mailbox = results[0];
+            if (!Guid.TryParse(mailbox.Properties["ExternalDirectoryObjectId"]?.Value?.ToString(), out var returnedId) || returnedId != directoryId)
+                throw new InvalidOperationException("The returned mailbox does not match the directory user. Status is unknown.");
+            var mailboxType = mailbox.Properties["RecipientTypeDetails"]?.Value?.ToString();
+            if (string.IsNullOrWhiteSpace(mailboxType)) throw new InvalidOperationException("Exchange did not return a mailbox type. Status is unknown.");
+            return mailboxType;
+        });
+
         // --- Full Access / Send As / Send on Behalf ---
 
         public Task<bool> HasFullAccessAsync(string mailboxIdentity, string userIdentity, RecipientInfo userObject) =>

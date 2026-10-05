@@ -19,6 +19,7 @@
     <PackageReference Include="Microsoft.Graph" Version="6.6.0" />
     <PackageReference Include="Microsoft.Identity.Client" Version="4.89.0" />
     <Compile Include="..\..\Services\GraphService.cs" Link="Services\GraphService.cs" />
+    <Compile Include="..\..\Services\UserSearch.cs" Link="Services\UserSearch.cs" />
     <Compile Include="..\..\Services\AuthService.cs" Link="Services\AuthService.cs" />
     <Compile Include="..\..\Services\PowerShellPrerequisites.cs" Link="Services\PowerShellPrerequisites.cs" />
     <Compile Include="..\..\Services\TokenAuthenticationProvider.cs" Link="Services\TokenAuthenticationProvider.cs" />

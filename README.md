@@ -26,6 +26,9 @@ Ported with feature parity from the original toolkit:
   file. Names containing spaces are preserved and duplicate identities are removed. Results appear
   per recipient, can be copied, and remain available after cancellation. A failed lookup does not
   stop the rest of the batch; cancellation stops before the next lookup.
+- **User Search** - Searches Entra users by name, employee ID, UPN, email, or SAM account,
+  with optional deleted-user results and read-only EXO mailbox checks. Includes the user
+  details and clipboard support from Entra Scout within EXOKit's existing connections.
 - **Ticket notes / logging** — Central `Logger` service mirrors the script's
   `Write-OutputLog` / `Write-SummaryLog` behavior, including a "Copy Last Ticket Notes" action
   that extracts the most recent `--- For IT Ticket ---` section from the log.
@@ -65,6 +68,30 @@ or a header named `Identity`, `Recipient`, `Email`, `EmailAddress`, `PrimarySmtp
 identity column is used and other columns are ignored. Comma and semicolon delimiters are supported;
 quote names containing either delimiter. Imports append to the existing input without duplicating it.
 
+### User search
+
+Connect EXO and Graph, then open User Search. Enter a name, `Last, First`, employee ID,
+UPN/email, or SAM account and press Enter or Search. Numeric employee IDs first try an
+`E` prefix, then the raw number if no match is found. Name searches use display-name prefixes;
+UPN/email searches use exact matches. All Graph result pages are read.
+
+Include deleted users adds soft-deleted directory users. Both live and deleted-user queries
+use the existing delegated `User.Read.All` permission with administrator consent; no new
+Graph scope is added. A denied or incomplete Graph read fails the search and clears its results.
+
+Check EXO mailboxes queries active mailboxes by directory object ID and verifies the returned
+identity. Turn it off for directory-only searches. Lookup failures remain Unknown with an
+explanation in user details; Not found means no active mailbox was returned within the
+connected administrator's Exchange scope. Deleted directory users are not checked for
+mailboxes, and their status makes no claim about retained or inactive mailboxes.
+
+Select a result and use View details or Copy details, or open details by double-clicking or
+pressing Enter. Details include email, employee/SAM IDs, job title, department, account status,
+mailbox status, object ID, creation time (UTC), and business phone numbers.
+Cancel retains completed directory results and marks unchecked mailboxes. Editing the query
+or search options, disconnecting, or saving connection settings clears old results.
+Search and mailbox checks make no directory changes. Entra Scout remains a separate, unchanged app.
+
 ## Configuration
 
 The package includes only the sanitized sample configuration. Runtime settings are stored at
@@ -101,7 +128,7 @@ Before EXO sign-in, the embedded PowerShell 7.6.6 host checks stable PSGallery v
 
 Connection failures show a dialog with the service error. Unexpected managed startup/UI/background failures are reported, with diagnostic logs under `%LOCALAPPDATA%\EXOKit\Logs`. Fatal errors are not marked handled to keep an unknown application state running. Applied changes are not automatically rolled back.
 
-Local validation covers service regressions and an x64 application build. Live MFA, Conditional Access, tenant consent, Key Vault access, and admin workflows still require operator testing with the newly built application. No release/package version was changed.
+Local validation covers service regressions and an x64 application build. Live MFA, Conditional Access, tenant consent, Key Vault access, and admin workflows still require operator testing with the newly built application.
 
 References: [EXO prerequisites](https://learn.microsoft.com/powershell/exchange/exchange-online-powershell-v2), [WAM compatibility](https://learn.microsoft.com/troubleshoot/exchange/administration/wam-integration-issues), [MSAL browser configuration](https://learn.microsoft.com/entra/msal/dotnet/acquiring-tokens/using-web-browsers).
 

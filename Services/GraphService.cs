@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.Graph;
@@ -37,6 +38,82 @@ namespace EXOKit.Services
         }
 
         private GraphServiceClient Client => _graphClient ?? throw new InvalidOperationException("Graph client not initialized. Connect to Microsoft Graph first.");
+
+        public async Task<List<UserSearchResult>> SearchUsersAsync(string query, bool includeDeleted = false, Action<string>? onProgress = null)
+        {
+            var parsed = SearchQueryParser.Parse(query) ?? throw new ArgumentException("Enter a name, employee ID, UPN, email, or SAM account.", nameof(query));
+            var cancellationToken = _authService.OperationCancellationToken;
+            cancellationToken.ThrowIfCancellationRequested();
+            var client = Client;
+            var select = new[] { "id", "displayName", "userPrincipalName", "mail", "employeeId", "onPremisesSamAccountName",
+                "jobTitle", "department", "accountEnabled", "createdDateTime", "businessPhones" };
+
+            async Task<List<UserSearchResult>> ReadUsersAsync(string filter, bool deleted)
+            {
+                var users = new List<UserSearchResult>();
+                var page = deleted
+                    ? await client.Directory.DeletedItems.GraphUser.GetAsync(config =>
+                    {
+                        config.QueryParameters.Filter = filter;
+                        config.QueryParameters.Select = select;
+                        config.QueryParameters.Top = 50;
+                        config.QueryParameters.Count = true;
+                        config.Headers.Add("ConsistencyLevel", "eventual");
+                    }, cancellationToken)
+                    : await client.Users.GetAsync(config =>
+                    {
+                        config.QueryParameters.Filter = filter;
+                        config.QueryParameters.Select = select;
+                        config.QueryParameters.Top = 50;
+                        config.QueryParameters.Count = true;
+                        config.Headers.Add("ConsistencyLevel", "eventual");
+                    }, cancellationToken);
+
+                while (true)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (page?.Value == null) throw new InvalidOperationException("Graph returned an unreadable user search response. Search is incomplete.");
+                    foreach (var user in page.Value)
+                    {
+                        if (string.IsNullOrWhiteSpace(user.Id)) throw new InvalidOperationException("Graph returned a user without an object ID. Search is incomplete.");
+                        users.Add(new UserSearchResult
+                        {
+                            ObjectId = user.Id,
+                            DisplayName = user.DisplayName ?? string.Empty,
+                            UserPrincipalName = user.UserPrincipalName ?? string.Empty,
+                            Mail = user.Mail ?? string.Empty,
+                            EmployeeId = user.EmployeeId ?? string.Empty,
+                            SamAccountName = user.OnPremisesSamAccountName ?? string.Empty,
+                            JobTitle = user.JobTitle ?? string.Empty,
+                            Department = user.Department ?? string.Empty,
+                            Enabled = user.AccountEnabled,
+                            CreatedDateTime = user.CreatedDateTime,
+                            BusinessPhone = string.Join("; ", user.BusinessPhones ?? new List<string>()),
+                            IsDeleted = deleted
+                        });
+                    }
+                    onProgress?.Invoke($"Searching {(deleted ? "deleted" : "active")} users: {users.Count} matches read...");
+                    if (string.IsNullOrEmpty(page.OdataNextLink)) return users;
+                    page = deleted
+                        ? await client.Directory.DeletedItems.GraphUser.WithUrl(page.OdataNextLink).GetAsync(config => config.Headers.Add("ConsistencyLevel", "eventual"), cancellationToken)
+                        : await client.Users.WithUrl(page.OdataNextLink).GetAsync(config => config.Headers.Add("ConsistencyLevel", "eventual"), cancellationToken);
+                }
+            }
+
+            async Task<List<UserSearchResult>> SearchScopeAsync(bool deleted)
+            {
+                var users = await ReadUsersAsync(parsed.Filter, deleted);
+                if (users.Count == 0 && parsed.FallbackFilter != null)
+                    users = await ReadUsersAsync(parsed.FallbackFilter, deleted);
+                return users;
+            }
+
+            Logger.Log($"User search: {parsed.Description}{(includeDeleted ? ", including deleted users" : "") }.");
+            var results = await SearchScopeAsync(false);
+            if (includeDeleted) results.AddRange(await SearchScopeAsync(true));
+            cancellationToken.ThrowIfCancellationRequested();
+            return results.DistinctBy(user => user.ObjectId).OrderBy(user => user.DisplayName, StringComparer.OrdinalIgnoreCase).ToList();
+        }
 
         public async Task VerifyConnectionAsync()
         {
