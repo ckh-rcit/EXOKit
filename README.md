@@ -225,7 +225,7 @@ results do not qualify for closure.
 
 ## Version and Updates
 
-The title bar and Settings show the installed MSIX version, currently `v1.0.35`; unpackaged builds
+The title bar and Settings show the installed MSIX version, currently `v1.0.36`; unpackaged builds
 use the assembly version. Release tags must use `vMajor.Minor.Build`. The workflow stamps that
 version into the manifest and assembly while retaining the existing package name and publisher.
 Use a version higher than the installed version for an update.

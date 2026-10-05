@@ -90,6 +90,12 @@ jobs:
           $version = "${{ github.ref_name }}"
           $msix = Get-ChildItem -Path "publish/msix" -Recurse -Filter "*.msix" | Select-Object -First 1
           if (-not $msix) { throw 'MSIX package was not produced.' }
+          $package = [IO.Compression.ZipFile]::OpenRead($msix.FullName)
+          try {
+            foreach ($path in @('AppxSignature.p7x', 'Modules/Microsoft.PowerShell.Management/Microsoft.PowerShell.Management.psd1', 'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1', 'Modules/Microsoft.PowerShell.Security/Microsoft.PowerShell.Security.psd1')) {
+              if (-not $package.GetEntry($path)) { throw "Required package file missing: $path" }
+            }
+          } finally { $package.Dispose() }
           Copy-Item $msix.FullName -Destination "EXOKit-$version-x64.msix"
 
       - name: Package certificate trust bundle
