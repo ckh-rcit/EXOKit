@@ -39,7 +39,7 @@ jobs:
           $sample | ConvertTo-Json -Depth 20 | Set-Content config.sample.json -Encoding utf8
 
       - name: Regression tests
-        run: dotnet test tests/EXOKit.Tests/EXOKit.Tests.csproj --configuration Release
+        run: dotnet test tests/EXOKit.Tests/EXOKit.Tests.csproj --configuration Release --runtime win-x64
 
       - name: Decode signing certificate
         shell: pwsh

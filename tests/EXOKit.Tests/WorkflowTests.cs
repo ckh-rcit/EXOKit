@@ -7,6 +7,57 @@ namespace EXOKit.Tests;
 
 public sealed class WorkflowTests
 {
+    [Fact]
+    public void HostedRuntimeLoadsBundledCoreCommandsWithOnlyDesktopModulePaths()
+    {
+        using var runspace = System.Management.Automation.Runspaces.RunspaceFactory.CreateRunspace(new LoggerPSHost(), LoggerPSHost.CreateInitialSessionState());
+        runspace.Open();
+        using var powershell = PowerShell.Create();
+        powershell.Runspace = runspace;
+        powershell.AddScript("""
+            $savedModulePath = $env:PSModulePath
+            try {
+                $env:PSModulePath = [IO.Path]::Combine($env:WINDIR, 'System32', 'WindowsPowerShell', 'v1.0', 'Modules')
+                $ErrorActionPreference = 'Stop'
+                Join-Path 'C:\' 'Modules'
+                [pscustomobject]@{ Ready = $true } | ConvertTo-Json -Compress
+                (Get-Module Microsoft.PowerShell.Management).ModuleBase
+            } finally { $env:PSModulePath = $savedModulePath }
+            """);
+        var results = powershell.Invoke();
+        Assert.False(powershell.HadErrors, string.Join(Environment.NewLine, powershell.Streams.Error));
+        Assert.Equal("C:\\Modules", results[0].ToString());
+        Assert.Equal("{\"Ready\":true}", results[1].ToString());
+        Assert.StartsWith(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar), results[2].ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void EmbeddedHostCanInstallAndImportExoPrerequisitesWithoutAuthentication()
+    {
+        using var runspace = RunspaceFactory.CreateRunspace(new LoggerPSHost(), LoggerPSHost.CreateInitialSessionState());
+        runspace.Open();
+        using var powershell = PowerShell.Create();
+        powershell.Runspace = runspace;
+        powershell.AddScript("""
+            param($bootstrap, $moduleRoot)
+            $savedModulePath = $env:PSModulePath
+            $env:PSModulePath = [IO.Path]::Combine($PSHOME, 'Modules')
+            try {
+                & ([scriptblock]::Create($bootstrap)) -ModuleRoot $moduleRoot
+            } finally { $env:PSModulePath = $savedModulePath }
+            """);
+        var moduleRoot = Path.Combine(Path.GetTempPath(), "EXOKit-bootstrap-" + Guid.NewGuid().ToString("N"));
+        powershell.AddParameter("bootstrap", PowerShellPrerequisites.Script).AddParameter("moduleRoot", moduleRoot);
+        powershell.Invoke();
+        Assert.False(powershell.HadErrors, string.Join(Environment.NewLine, powershell.Streams.Error));
+        powershell.Commands.Clear();
+        powershell.AddCommand("Get-Command").AddParameter("Name", "Connect-ExchangeOnline").AddParameter("ErrorAction", "Stop");
+        var commands = powershell.Invoke();
+        Assert.False(powershell.HadErrors, string.Join(Environment.NewLine, powershell.Streams.Error));
+        var command = (CommandInfo)Assert.Single(commands).BaseObject;
+        Assert.StartsWith(moduleRoot, command.Module.ModuleBase, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Theory]
     [InlineData("Connected", "Active", true)]
     [InlineData("Connected", "Expired", false)]

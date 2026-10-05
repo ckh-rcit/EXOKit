@@ -89,16 +89,14 @@ namespace EXOKit.Services
             try
             {
                 LastError = null;
-                Logger.Log(useBrowserSignIn
-                    ? "Connecting to Exchange Online using browser sign-in (WAM compatibility mode)..."
-                    : "Connecting to Exchange Online using interactive Microsoft sign-in...");
+                Logger.Log("Preparing the embedded PowerShell runtime and Exchange Online modules. Sign-in has not started...");
                 EnsureConsoleAllocated();
                 EnsureRunspaceOpen();
 
                 using (var ps = PowerShell.Create())
                 {
                     ps.Runspace = _runspace;
-                                        ps.AddScript(PowerShellPrerequisites.Script);
+                    ps.AddScript(PowerShellPrerequisites.Script);
                     InvokePipeline(ps);
                     LogPipelineErrors(ps, "Import-Module ExchangeOnlineManagement");
 
@@ -111,6 +109,9 @@ namespace EXOKit.Services
                 using (var ps = PowerShell.Create())
                 {
                     ps.Runspace = _runspace;
+                    Logger.Log(useBrowserSignIn
+                        ? "Connecting to Exchange Online using browser sign-in (WAM compatibility mode)..."
+                        : "Connecting to Exchange Online using interactive Microsoft sign-in...");
                     InvokeInteractiveConnection(ps, useBrowserSignIn, OperationCancellationToken, CommandTimeout);
                     LogPipelineErrors(ps, "Connect-ExchangeOnline");
 

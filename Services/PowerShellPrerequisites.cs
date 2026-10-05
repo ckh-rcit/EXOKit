@@ -3,11 +3,13 @@ namespace EXOKit.Services;
 internal static class PowerShellPrerequisites
 {
     internal const string Script = """
+        param([string]$ModuleRoot)
         $ErrorActionPreference = 'Stop'
         if ($PSVersionTable.PSVersion -lt [version]'7.6.0') { throw 'Update the application: EXO 3.10.1 requires embedded PowerShell 7.6 or later.' }
         $documents = [Environment]::GetFolderPath([Environment+SpecialFolder]::MyDocuments)
         if ([string]::IsNullOrWhiteSpace($documents)) { throw 'The CurrentUser Documents directory is unavailable. Cannot prepare PowerShell modules.' }
         $userModules = Join-Path $documents 'PowerShell\Modules'
+        if ($ModuleRoot) { $userModules = $ModuleRoot }
         if (($env:PSModulePath -split [IO.Path]::PathSeparator) -notcontains $userModules) {
             $env:PSModulePath = $userModules + [IO.Path]::PathSeparator + $env:PSModulePath
         }
@@ -42,9 +44,14 @@ internal static class PowerShellPrerequisites
             if ($loaded -and @($loaded | Where-Object Version -NE $version).Count) { throw "$name has an older version loaded. Restart the application before updating modules." }
             if (-not $installed -or $installed.Version -ne $version) {
                 Write-Host "Installing $name $version for CurrentUser..."
-                Install-PSResource $name -Version $version.ToString() -Repository PSGallery -Scope CurrentUser -TrustRepository -Quiet
+                [IO.Directory]::CreateDirectory($userModules) | Out-Null
+                Save-PSResource $name -Version $version.ToString() -Repository PSGallery -Path $userModules -IncludeXml -TrustRepository -Quiet
+                $modulePath = Join-Path $userModules "$name\$version\$name.psd1"
+            } else {
+                $modulePath = $installed.Path
             }
-            Import-Module $name -RequiredVersion $version -Global
+            if (-not (Test-Path -LiteralPath $modulePath)) { throw "$name $version was not saved at $modulePath. Module preparation is incomplete." }
+            Import-Module $modulePath -RequiredVersion $version -Global
             Write-Host "Ready: $name $version"
         }
         foreach ($name in @('Connect-ExchangeOnline','Disconnect-ExchangeOnline','Get-ConnectionInformation','Get-EXOMailbox','Update-ModuleManifest')) {
