@@ -357,6 +357,74 @@ public sealed class WorkflowTests
         Assert.StartsWith(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar), results[2].ToString(), StringComparison.OrdinalIgnoreCase);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PrerequisitesResolvePowerShellHomeWhenCommandLocationHasNoManager(bool brokenFirst)
+    {
+        using var runspace = RunspaceFactory.CreateRunspace(new LoggerPSHost(), LoggerPSHost.CreateInitialSessionState());
+        runspace.Open();
+        using var powershell = PowerShell.Create();
+        powershell.Runspace = runspace;
+        powershell.AddScript("""
+            param($bootstrap, $brokenFirst)
+            $savedModulePath = $env:PSModulePath
+            try {
+                $global:Pwsh = Microsoft.PowerShell.Core\Get-Command pwsh.exe -CommandType Application -ErrorAction Stop
+                $global:BrokenFirst = $brokenFirst
+                $global:AliasDirectory = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString('N'))
+                function Get-Module { param($Name, [switch]$ListAvailable)
+                    if ($Name -like '*\Microsoft.PowerShell.PSResourceGet.psd1') {
+                        Microsoft.PowerShell.Core\Get-Module -ListAvailable $Name
+                    }
+                }
+                function Get-Command { param($Name, $CommandType, [switch]$All, $ErrorAction)
+                    if ($global:BrokenFirst) { [pscustomobject]@{ Source = (Join-Path $global:AliasDirectory 'pwsh.exe') } }
+                    $global:Pwsh
+                }
+                function Split-Path { param($Path) $global:AliasDirectory }
+                function Import-Module { param($Name)
+                    if ($Name -like '*\Microsoft.PowerShell.PSResourceGet.psd1') { throw 'TEST: manager resolved' }
+                    throw "Unexpected import: $Name"
+                }
+                try { & ([scriptblock]::Create($bootstrap)) }
+                catch { $_.Exception.Message }
+            } finally { $env:PSModulePath = $savedModulePath }
+            """);
+        powershell.AddParameter("bootstrap", PowerShellPrerequisites.Script).AddParameter("brokenFirst", brokenFirst);
+        var results = powershell.Invoke();
+        Assert.Empty(powershell.Streams.Error);
+        Assert.Equal("TEST: manager resolved", Assert.Single(results).ToString());
+    }
+
+    [Fact]
+    public void PrerequisitesDistinguishMissingManagerFromEmbeddedEngineVersion()
+    {
+        using var runspace = RunspaceFactory.CreateRunspace(new LoggerPSHost(), LoggerPSHost.CreateInitialSessionState());
+        runspace.Open();
+        using var powershell = PowerShell.Create();
+        powershell.Runspace = runspace;
+        powershell.AddScript("""
+            param($bootstrap)
+            $savedModulePath = $env:PSModulePath
+            try {
+                function Get-Module { param($Name, [switch]$ListAvailable) }
+                function Get-Command { param($Name, $CommandType, [switch]$All, $ErrorAction) }
+                function Test-Path { param($LiteralPath, $PathType) $false }
+                try { & ([scriptblock]::Create($bootstrap)) }
+                catch { $_.Exception.Message }
+            } finally { $env:PSModulePath = $savedModulePath }
+            """);
+        powershell.AddParameter("bootstrap", PowerShellPrerequisites.Script);
+        var results = powershell.Invoke();
+        Assert.Empty(powershell.Streams.Error);
+        var message = Assert.Single(results).ToString();
+        Assert.Contains("EXOKit is running embedded PowerShell 7.6", message);
+        Assert.Contains("cannot locate Microsoft.PowerShell.PSResourceGet 1.2.0 or later", message);
+        Assert.Contains("-Scope CurrentUser", message);
+        Assert.DoesNotContain("Install PowerShell 7.6", message);
+    }
+
     [Fact]
     public void EmbeddedHostCanInstallAndImportExoPrerequisitesWithoutAuthentication()
     {
