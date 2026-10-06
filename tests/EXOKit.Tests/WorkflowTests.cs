@@ -7,6 +7,250 @@ namespace EXOKit.Tests;
 
 public sealed class WorkflowTests
 {
+    [Fact]
+    public async Task CalendarOrganizerPreviewCannotMutateAndCsvPreservesUnconfirmedStatus()
+    {
+        using var runspace = CreateRunspace("""
+            $global:Transfers = 0
+            function Get-Mailbox { [CmdletBinding()] param($Identity)
+                [pscustomobject]@{ PrimarySmtpAddress = $Identity; RecipientTypeDetails = 'UserMailbox' }
+            }
+            function Invoke-ChangeMeetingOrganizer { [CmdletBinding(SupportsShouldProcess)] param($Identity, $NewOrganizer, $EventId)
+                if (!$WhatIfPreference) { $global:Transfers++; throw 'Preview attempted a mutation' }
+                $global:Previewed = $true
+            }
+            """);
+        var exo = new ExoPowerShellService(runspace);
+        try
+        {
+            var request = new MeetingOrganizerRequest("old@example.org", "new@example.org", true, "series-id", null);
+            Assert.Empty(await exo.PreviewMeetingOrganizerChangeAsync(request));
+            Assert.Equal(true, runspace.SessionStateProxy.GetVariable("Previewed"));
+            Assert.Equal(0, runspace.SessionStateProxy.GetVariable("Transfers"));
+            var csv = CalendarTransferRecord.CreateCsvLines(new[]
+            {
+                new CalendarTransferRecord(DateTimeOffset.UtcNow, request.CurrentOrganizer, request.NewOrganizer,
+                    "Subject", "=SUM(1,2)", "Next instance", "Unconfirmed", "Calendar \"outcome\"\nnot verified")
+            }).ToArray();
+            Assert.Equal(2, csv.Length);
+            Assert.Contains("\"'=SUM(1,2)\"", csv[1]);
+            Assert.Contains("Unconfirmed", csv[1]);
+            Assert.Contains("\"Calendar \"\"outcome\"\"\nnot verified\"", csv[1]);
+        }
+        finally { await exo.ShutdownAsync(); }
+    }
+
+    [Theory]
+    [InlineData("subject")]
+    [InlineData("event")]
+    [InlineData("ambiguous")]
+    [InlineData("shared")]
+    [InlineData("group")]
+    [InlineData("new-invalid")]
+    [InlineData("same")]
+    [InlineData("past")]
+    [InlineData("disabled")]
+    [InlineData("unexpected")]
+    [InlineData("cancelled")]
+    public async Task CalendarOrganizerTransferHonorsDocumentedConstraints(string scenario)
+    {
+        using var runspace = CreateRunspace("""
+            $global:Transfers = 0
+            function Get-Mailbox { [CmdletBinding()] param($Identity)
+                $old = $Identity -like 'old*'
+                $type = 'UserMailbox'
+                if ($old -and $global:Scenario -eq 'shared') { $type = 'SharedMailbox' }
+                if ($old -and $global:Scenario -eq 'group') { $type = 'GroupMailbox' }
+                if (!$old -and $global:Scenario -eq 'new-invalid') { $type = 'SharedMailbox' }
+                [pscustomobject]@{ PrimarySmtpAddress = $(if ($old -or $global:Scenario -eq 'same') { 'old@example.org' } else { 'new@example.org' }); RecipientTypeDetails = $type }
+            }
+            function Invoke-ChangeMeetingOrganizer { [CmdletBinding(SupportsShouldProcess)] param($Identity, $NewOrganizer, $EventId, $Subject, [datetime]$TransferSeriesStartDate)
+                $global:Transfers++
+                if ($Identity -ne 'old@example.org' -or $NewOrganizer -ne 'new@example.org') { throw 'Wrong organizers' }
+                if ($PSBoundParameters.ContainsKey('EventId') -eq $PSBoundParameters.ContainsKey('Subject')) { throw 'Exactly one selector required' }
+                $global:Selector = $(if ($EventId) { $EventId } else { $Subject })
+                $global:UsedEventId = $PSBoundParameters.ContainsKey('EventId')
+                $global:TransferDate = $TransferSeriesStartDate
+                if ($global:Scenario -eq 'disabled') { throw 'Transfer meeting action is disabled' }
+                if ($global:Scenario -eq 'unexpected') { [pscustomobject]@{ Status = 'Unknown' } }
+                if ($global:Scenario -eq 'ambiguous') {
+                    [pscustomobject]@{ EventId = 'series-1'; Subject = 'Status' }
+                    [pscustomobject]@{ EventId = 'series-2'; Subject = 'Status' }
+                }
+            }
+            """);
+        runspace.SessionStateProxy.SetVariable("Scenario", scenario);
+        var exo = new ExoPowerShellService(runspace);
+        try
+        {
+            var request = new MeetingOrganizerRequest("old-alias", "new-alias", scenario == "event", "Status 'review'; $true", DateTime.Today.AddDays(scenario == "past" ? -1 : 2));
+            if (scenario == "cancelled")
+            {
+                exo.OperationCancellationToken = new CancellationToken(true);
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => exo.ChangeMeetingOrganizerAsync(request));
+            }
+            else if (scenario is "shared" or "group" or "new-invalid" or "same" or "past")
+                await Assert.ThrowsAnyAsync<Exception>(() => exo.ChangeMeetingOrganizerAsync(request));
+            else
+            {
+                var validated = await exo.ValidateMeetingOrganizerChangeAsync(request);
+                Assert.Equal("old@example.org", validated.CurrentOrganizer);
+                Assert.Equal("new@example.org", validated.NewOrganizer);
+                Assert.Equal(0, runspace.SessionStateProxy.GetVariable("Transfers"));
+                if (scenario is "disabled" or "unexpected")
+                    await Assert.ThrowsAnyAsync<Exception>(() => exo.ChangeMeetingOrganizerAsync(request));
+                else
+                {
+                    var matches = await exo.ChangeMeetingOrganizerAsync(request);
+                    Assert.Equal(scenario == "ambiguous" ? 2 : 0, matches.Count);
+                    Assert.Equal(request.Selector, runspace.SessionStateProxy.GetVariable("Selector"));
+                    Assert.Equal(scenario == "event", runspace.SessionStateProxy.GetVariable("UsedEventId"));
+                    Assert.Equal(request.TransferSeriesStartDate, runspace.SessionStateProxy.GetVariable("TransferDate"));
+                }
+            }
+            Assert.Equal(scenario is "shared" or "group" or "new-invalid" or "same" or "past" or "cancelled" ? 0 : 1,
+                runspace.SessionStateProxy.GetVariable("Transfers"));
+        }
+        finally { exo.OperationCancellationToken = default; await exo.ShutdownAsync(); }
+    }
+
+    [Theory]
+    [InlineData("add")]
+    [InlineData("set")]
+    [InlineData("none")]
+    [InlineData("remove")]
+    [InlineData("denied")]
+    [InlineData("stale")]
+    [InlineData("malformed")]
+    [InlineData("delegate")]
+    [InlineData("transient-read")]
+    [InlineData("transient-write")]
+    [InlineData("readback-denied")]
+    public async Task CalendarPermissionChangesAreScopedAndVerified(string scenario)
+    {
+        using var runspace = CreateRunspace("""
+            $global:Rights = 'Reviewer'
+            $global:LastMutation = ''
+            $global:MutationCount = 0
+            $global:ReadCount = 0
+            function Get-Mailbox { [CmdletBinding()] param($Identity)
+                [pscustomobject]@{ PrimarySmtpAddress = 'owner@example.org'; RecipientTypeDetails = 'SharedMailbox' }
+            }
+            function Get-Recipient { [CmdletBinding()] param($Identity, $RecipientTypeDetails)
+                [pscustomobject]@{ PrimarySmtpAddress = 'reader@example.org'; RecipientTypeDetails = 'UserMailbox' }
+            }
+            function Get-EXOMailboxFolderStatistics { [CmdletBinding()] param($PrimarySmtpAddress, $FolderScope)
+                [pscustomobject]@{ FolderType = 'Calendar'; FolderPath = '/Kalender' }
+            }
+            function Get-EXOMailboxFolderPermission { [CmdletBinding()] param($Identity, $User)
+                if ($Identity -ne 'owner@example.org:\Kalender' -or $User -ne 'reader@example.org') { throw 'Wrong permission scope' }
+                $global:ReadCount++
+                if ($global:Scenario -eq 'transient-read' -and $global:ReadCount -eq 1) { throw 'Object reference not set' }
+                if ($global:Scenario -eq 'readback-denied' -and $global:MutationCount -gt 0) { throw 'Read-back access denied' }
+                if ($global:Scenario -eq 'denied') { throw 'Access denied' }
+                if ($global:Scenario -eq 'malformed') { [pscustomobject]@{ AccessRights = @() }; return }
+                if ($null -eq $global:Rights) {
+                    $PSCmdlet.WriteError([Management.Automation.ErrorRecord]::new([Exception]::new('No entry'), 'UserNotFoundInPermissionEntryException', [Management.Automation.ErrorCategory]::ObjectNotFound, $User)); return
+                }
+                [pscustomobject]@{ AccessRights = @($global:Rights); SharingPermissionFlags = @(if ($global:Scenario -eq 'delegate') { 'Delegate' } else { 'None' }) }
+            }
+            function Add-MailboxFolderPermission { [CmdletBinding(SupportsShouldProcess)] param($Identity, $User, $AccessRights)
+                if ($Identity -ne 'owner@example.org:\Kalender' -or $User -ne 'reader@example.org') { throw 'Wrong mutation scope' }
+                $global:MutationCount++
+                $global:LastMutation = 'Add'; $global:Rights = $AccessRights
+            }
+            function Set-MailboxFolderPermission { [CmdletBinding(SupportsShouldProcess)] param($Identity, $User, $AccessRights)
+                if ($Identity -ne 'owner@example.org:\Kalender' -or $User -ne 'reader@example.org') { throw 'Wrong mutation scope' }
+                $global:MutationCount++
+                $global:LastMutation = 'Set'; $global:Rights = $AccessRights
+                if ($global:Scenario -eq 'transient-write') { throw 'Object reference not set' }
+            }
+            function Remove-MailboxFolderPermission { [CmdletBinding(SupportsShouldProcess)] param($Identity, $User)
+                if ($Identity -ne 'owner@example.org:\Kalender' -or $User -ne 'reader@example.org') { throw 'Wrong mutation scope' }
+                $global:MutationCount++
+                $global:LastMutation = 'Remove'; $global:Rights = $null
+            }
+            """);
+        runspace.SessionStateProxy.SetVariable("Scenario", scenario);
+        if (scenario == "add") runspace.SessionStateProxy.SetVariable("Rights", null);
+        if (scenario == "delegate") runspace.SessionStateProxy.SetVariable("Rights", "Editor");
+        var exo = new ExoPowerShellService(runspace);
+        try
+        {
+            if (scenario is "denied" or "malformed")
+                await Assert.ThrowsAnyAsync<Exception>(() => exo.GetCalendarPermissionAsync("owner", "reader"));
+            else
+            {
+                var loaded = await exo.GetCalendarPermissionAsync("owner", "reader");
+                if (scenario == "stale")
+                {
+                    runspace.SessionStateProxy.SetVariable("Rights", "Owner");
+                    await Assert.ThrowsAsync<InvalidOperationException>(() => exo.SetCalendarPermissionAsync("owner", "reader", "Editor", loaded));
+                }
+                else if (scenario == "delegate")
+                {
+                    await Assert.ThrowsAsync<InvalidOperationException>(() => exo.SetCalendarPermissionAsync("owner", "reader", "Reviewer", loaded));
+                    Assert.Contains("Delegate", (await exo.SetCalendarPermissionAsync("owner", "reader", "Editor", loaded)).SharingPermissionFlags);
+                }
+                else if (scenario == "readback-denied")
+                    await Assert.ThrowsAnyAsync<Exception>(() => exo.SetCalendarPermissionAsync("owner", "reader", "Editor", loaded));
+                else if (scenario == "remove")
+                {
+                    Assert.False((await exo.RemoveCalendarPermissionAsync("owner", "reader", loaded)).HasEntry);
+                    Assert.Equal("Remove", runspace.SessionStateProxy.GetVariable("LastMutation"));
+                }
+                else
+                {
+                    var desired = scenario == "none" ? "None" : "Editor";
+                    var changed = await exo.SetCalendarPermissionAsync("owner", "reader", desired, loaded);
+                    Assert.True(changed.HasEntry);
+                    Assert.Equal(new[] { desired }, changed.AccessRights);
+                    Assert.Equal(scenario == "add" ? "Add" : "Set", runspace.SessionStateProxy.GetVariable("LastMutation"));
+                }
+            }
+            if (scenario is "denied" or "malformed" or "stale" or "delegate") Assert.Equal("", runspace.SessionStateProxy.GetVariable("LastMutation"));
+            Assert.Equal(scenario is "denied" or "malformed" or "stale" or "delegate" ? 0 : 1, runspace.SessionStateProxy.GetVariable("MutationCount"));
+            await Assert.ThrowsAsync<ArgumentException>(() => exo.GetCalendarPermissionAsync("owner", "Default"));
+        }
+        finally { await exo.ShutdownAsync(); }
+    }
+
+    [Theory]
+    [InlineData("localized")]
+    [InlineData("denied")]
+    [InlineData("missing")]
+    [InlineData("ambiguous")]
+    [InlineData("malformed")]
+    public async Task CalendarFolderDiscoveryIsLocalizedAndFailsClosed(string scenario)
+    {
+        using var runspace = CreateRunspace("""
+            function Get-Mailbox { [CmdletBinding()] param($Identity)
+                if ($Identity -ne 'owner-alias') { throw 'Unexpected owner' }
+                [pscustomobject]@{ PrimarySmtpAddress = 'owner@example.org'; RecipientTypeDetails = 'SharedMailbox' }
+            }
+            function Get-EXOMailboxFolderStatistics { [CmdletBinding()] param($PrimarySmtpAddress, $FolderScope)
+                if ($PrimarySmtpAddress -ne 'owner@example.org' -or $FolderScope -ne 'Calendar') { throw 'Unscoped folder query' }
+                switch ($global:Scenario) {
+                    'denied' { throw 'Access denied' }
+                    'missing' { return }
+                    'ambiguous' { [pscustomobject]@{ FolderType = 'Calendar'; FolderPath = '/Other' } }
+                    'malformed' { [pscustomobject]@{ FolderType = 'Calendar' }; return }
+                }
+                [pscustomobject]@{ FolderType = 'User Created'; FolderPath = '/Secondary' }
+                [pscustomobject]@{ FolderType = 'Calendar'; FolderPath = '/Kalender' }
+            }
+            """);
+        runspace.SessionStateProxy.SetVariable("Scenario", scenario);
+        var exo = new ExoPowerShellService(runspace);
+        try
+        {
+            if (scenario == "localized") Assert.Equal(@"owner@example.org:\Kalender", await exo.GetCalendarFolderIdentityAsync(" owner-alias "));
+            else await Assert.ThrowsAnyAsync<Exception>(() => exo.GetCalendarFolderIdentityAsync("owner-alias"));
+            await Assert.ThrowsAsync<ArgumentException>(() => exo.GetCalendarFolderIdentityAsync(" "));
+        }
+        finally { await exo.ShutdownAsync(); }
+    }
+
     [Theory]
     [InlineData(ReportKind.GroupMembership, "SharedMailbox", "requires a group")]
     [InlineData(ReportKind.MailboxPermissions, "MailUniversalDistributionGroup", "requires a mailbox")]

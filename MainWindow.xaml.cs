@@ -110,6 +110,7 @@ namespace EXOKit
             CheckBoxUserSearchMailboxes.Checked += (_, _) => ResetUserSearch();
             CheckBoxUserSearchMailboxes.Unchecked += (_, _) => ResetUserSearch();
             ListViewSnapshots.ItemsSource = _snapshotItems;
+            InitializeCalendarControls();
 
             LoadSettingsIntoUi();
 
@@ -461,6 +462,7 @@ namespace EXOKit
             PanelCreateGroup.Visibility = Visibility.Collapsed;
             PanelGroupSettings.Visibility = Visibility.Collapsed;
             PanelBookings.Visibility = Visibility.Collapsed;
+            PanelCalendar.Visibility = Visibility.Collapsed;
             PanelRecipientLookup.Visibility = Visibility.Collapsed;
             PanelUserSearch.Visibility = Visibility.Collapsed;
             PanelReporting.Visibility = Visibility.Collapsed;
@@ -500,6 +502,9 @@ namespace EXOKit
                     break;
                 case "Bookings":
                     PanelBookings.Visibility = Visibility.Visible;
+                    break;
+                case "Calendar":
+                    PanelCalendar.Visibility = Visibility.Visible;
                     break;
                 case "RecipientLookup":
                     PanelRecipientLookup.Visibility = Visibility.Visible;
@@ -612,6 +617,7 @@ namespace EXOKit
             else if (_reportTenantId == null)
                 SetReportStatus(_exo.IsConnected ? "Ready" : "EXO not connected", "", InfoBarSeverity.Informational);
             UpdateReportingControls();
+            UpdateCalendarConnectionState();
         }
 
         // --- Connection handlers ---

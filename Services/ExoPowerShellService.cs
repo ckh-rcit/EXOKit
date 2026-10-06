@@ -11,6 +11,27 @@ using System.Threading.Tasks;
 
 namespace EXOKit.Services
 {
+    public sealed record CalendarPermissionInfo(string FolderIdentity, string UserIdentity, bool HasEntry,
+        string[] AccessRights, string[] SharingPermissionFlags);
+
+    public sealed record MeetingOrganizerRequest(string CurrentOrganizer, string NewOrganizer, bool UseEventId,
+        string Selector, DateTime? TransferSeriesStartDate);
+
+    public sealed record MeetingOrganizerMatch(string EventId, string Subject);
+
+    public sealed record CalendarTransferRecord(DateTimeOffset RecordedAt, string CurrentOrganizer, string NewOrganizer,
+        string MatchBy, string Selector, string EffectiveStart, string Status, string Details)
+    {
+        public static IEnumerable<string> CreateCsvLines(IEnumerable<CalendarTransferRecord> records)
+        {
+            yield return "RecordedAtUtc,CurrentOrganizer,NewOrganizer,MatchBy,Selector,EffectiveStart,Status,Details";
+            foreach (var record in records)
+                yield return string.Join(",", new[] { record.RecordedAt.ToUniversalTime().ToString("O"), record.CurrentOrganizer,
+                    record.NewOrganizer, record.MatchBy, record.Selector, record.EffectiveStart, record.Status, record.Details }
+                    .Select(InputParsingHelpers.EscapeCsv));
+        }
+    }
+
     public class RecipientInfo
     {
         public string? Name { get; set; }
@@ -308,6 +329,190 @@ namespace EXOKit.Services
             if (string.IsNullOrWhiteSpace(mailboxType)) throw new InvalidOperationException("Exchange did not return a mailbox type. Status is unknown.");
             return mailboxType;
         });
+
+        public Task<string> GetCalendarFolderIdentityAsync(string owner) => RunOnStaThreadAsync(() =>
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(owner);
+            using var mailboxQuery = PowerShell.Create();
+            mailboxQuery.Runspace = _runspace;
+            mailboxQuery.AddCommand("Get-Mailbox").AddParameter("Identity", owner.Trim()).AddParameter("ErrorAction", "Stop");
+            var mailboxes = InvokePipeline(mailboxQuery);
+            if (mailboxQuery.HadErrors) throw BuildPipelineException(mailboxQuery);
+            if (mailboxes.Count != 1) throw new InvalidOperationException("Expected one calendar owner mailbox.");
+            var mailbox = mailboxes[0];
+            var mailboxType = mailbox.Properties["RecipientTypeDetails"]?.Value?.ToString();
+            if (mailboxType is not ("UserMailbox" or "SharedMailbox" or "RoomMailbox" or "EquipmentMailbox"))
+                throw new InvalidOperationException("Calendar permissions require a user, shared, room, or equipment mailbox.");
+            var address = mailbox.Properties["PrimarySmtpAddress"]?.Value?.ToString();
+            if (string.IsNullOrWhiteSpace(address)) throw new InvalidOperationException("Calendar owner has no primary SMTP address.");
+
+            using var folderQuery = PowerShell.Create();
+            folderQuery.Runspace = _runspace;
+            folderQuery.AddCommand("Get-EXOMailboxFolderStatistics").AddParameter("PrimarySmtpAddress", address)
+                .AddParameter("FolderScope", "Calendar").AddParameter("ErrorAction", "Stop");
+            var folders = InvokePipeline(folderQuery);
+            if (folderQuery.HadErrors) throw BuildPipelineException(folderQuery);
+            var calendars = folders.Where(folder => folder.Properties["FolderType"]?.Value?.ToString() == "Calendar").ToArray();
+            if (calendars.Length != 1) throw new InvalidOperationException("Could not uniquely resolve the default calendar folder.");
+            var path = calendars[0].Properties["FolderPath"]?.Value?.ToString();
+            if (string.IsNullOrWhiteSpace(path) || !path.StartsWith('/') || path.Length == 1)
+                throw new InvalidOperationException("Exchange returned an unreadable calendar folder path.");
+            return $"{address}:{path.Replace('/', '\\')}";
+        });
+
+        public static IReadOnlyList<string> CalendarPermissionRoles { get; } = Array.AsReadOnly(new[]
+        {
+            "Reviewer", "Editor", "Author", "PublishingAuthor", "PublishingEditor", "Owner",
+            "NonEditingAuthor", "LimitedDetails", "AvailabilityOnly", "Contributor", "None"
+        });
+
+        public async Task<CalendarPermissionInfo> GetCalendarPermissionAsync(string owner, string user)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(user);
+            if (user.Trim().Equals("Default", StringComparison.OrdinalIgnoreCase) || user.Trim().Equals("Anonymous", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Specify a mail-enabled user or security group, not Default or Anonymous.", nameof(user));
+            var folder = await GetCalendarFolderIdentityAsync(owner);
+            var recipient = await GetRecipientAsync(user.Trim()) ?? throw new InvalidOperationException("Permission recipient was not found.");
+            if (recipient.RecipientTypeDetails is not ("UserMailbox" or "SharedMailbox" or "RoomMailbox" or "EquipmentMailbox"
+                or "MailUser" or "GuestMailUser" or "RemoteUserMailbox" or "MailUniversalSecurityGroup"))
+                throw new InvalidOperationException("Calendar access requires a mail-enabled security principal, not a contact or distribution group.");
+            var userIdentity = !string.IsNullOrWhiteSpace(recipient.UserPrincipalName) ? recipient.UserPrincipalName : recipient.PrimarySmtpAddress;
+            if (string.IsNullOrWhiteSpace(userIdentity)) throw new InvalidOperationException("Permission recipient has no usable UPN or SMTP address.");
+            return await ReadCalendarPermissionAsync(folder, userIdentity);
+        }
+
+        private Task<CalendarPermissionInfo> ReadCalendarPermissionAsync(string folder, string user) =>
+            PermissionVerification.ReadAsync(() => RunOnStaThreadAsync(() =>
+            {
+                using var query = PowerShell.Create();
+                query.Runspace = _runspace;
+                query.AddCommand("Get-EXOMailboxFolderPermission").AddParameter("Identity", folder)
+                    .AddParameter("User", user).AddParameter("ErrorAction", "Continue");
+                var results = InvokePipeline(query);
+                if (results.Count == 0 && query.Streams.Error.Count > 0 && query.Streams.Error.All(error =>
+                    error.FullyQualifiedErrorId.Contains("UserNotFoundInPermissionEntry", StringComparison.Ordinal)))
+                    return new CalendarPermissionInfo(folder, user, false, Array.Empty<string>(), Array.Empty<string>());
+                if (query.HadErrors) throw BuildPipelineException(query);
+                if (results.Count != 1) throw new InvalidOperationException("Exchange did not return one readable calendar permission entry.");
+                var rights = PermissionVerification.ReadStrings(results[0], "AccessRights");
+                if (rights.Length == 0) throw new InvalidOperationException("Calendar permission rights are unreadable.");
+                return new CalendarPermissionInfo(folder, user, true, rights,
+                    PermissionVerification.ReadStrings(results[0], "SharingPermissionFlags"));
+            }), cancellationToken: OperationCancellationToken);
+
+        public Task<CalendarPermissionInfo> SetCalendarPermissionAsync(string owner, string user, string role, CalendarPermissionInfo expected)
+        {
+            if (!CalendarPermissionRoles.Contains(role, StringComparer.Ordinal)) throw new ArgumentException("Choose a supported calendar permission role.", nameof(role));
+            return ChangeCalendarPermissionAsync(owner, user, role, expected);
+        }
+
+        public Task<CalendarPermissionInfo> RemoveCalendarPermissionAsync(string owner, string user, CalendarPermissionInfo expected) =>
+            ChangeCalendarPermissionAsync(owner, user, null, expected);
+
+        private async Task<CalendarPermissionInfo> ChangeCalendarPermissionAsync(string owner, string user, string? role, CalendarPermissionInfo expected)
+        {
+            ArgumentNullException.ThrowIfNull(expected);
+            var current = await GetCalendarPermissionAsync(owner, user);
+            static bool SameValues(string[] first, string[] second) => first.OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+                .SequenceEqual(second.OrderBy(value => value, StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase);
+            if (!string.Equals(current.FolderIdentity, expected.FolderIdentity, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(current.UserIdentity, expected.UserIdentity, StringComparison.OrdinalIgnoreCase)
+                || current.HasEntry != expected.HasEntry || !SameValues(current.AccessRights, expected.AccessRights)
+                || !SameValues(current.SharingPermissionFlags, expected.SharingPermissionFlags))
+                throw new InvalidOperationException("Calendar permission changed since it was loaded. Reload before making changes.");
+            if (role is not (null or "Editor") && current.SharingPermissionFlags.Any(flag => flag.Contains("Delegate", StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException("This user is a calendar delegate. Keep Editor, or manage delegate settings before changing the role.");
+
+            var verified = current;
+            await PermissionVerification.ApplyAsync(
+                () => RunOnStaThreadAsync(() =>
+                {
+                    using var command = PowerShell.Create();
+                    command.Runspace = _runspace;
+                    command.AddCommand(role == null ? "Remove-MailboxFolderPermission" : current.HasEntry ? "Set-MailboxFolderPermission" : "Add-MailboxFolderPermission")
+                        .AddParameter("Identity", current.FolderIdentity).AddParameter("User", current.UserIdentity)
+                        .AddParameter("Confirm", false).AddParameter("ErrorAction", "Stop");
+                    if (role != null) command.AddParameter("AccessRights", role);
+                    InvokePipeline(command);
+                    if (command.HadErrors) throw BuildPipelineException(command);
+                }),
+                async () =>
+                {
+                    verified = await ReadCalendarPermissionAsync(current.FolderIdentity, current.UserIdentity);
+                    return role == null ? !verified.HasEntry : verified.HasEntry
+                        && SameValues(verified.AccessRights, new[] { role })
+                        && (!current.HasEntry || SameValues(verified.SharingPermissionFlags, current.SharingPermissionFlags));
+                }, true, cancellationToken: OperationCancellationToken);
+            return verified;
+        }
+
+        public Task<MeetingOrganizerRequest> ValidateMeetingOrganizerChangeAsync(MeetingOrganizerRequest request) => RunOnStaThreadAsync(() =>
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            ArgumentException.ThrowIfNullOrWhiteSpace(request.CurrentOrganizer);
+            ArgumentException.ThrowIfNullOrWhiteSpace(request.NewOrganizer);
+            ArgumentException.ThrowIfNullOrWhiteSpace(request.Selector);
+            if (request.TransferSeriesStartDate?.Date <= DateTime.Today)
+                throw new ArgumentException("The transfer start date must be in the future.");
+
+            string ResolveOrganizer(string identity)
+            {
+                using var query = PowerShell.Create();
+                query.Runspace = _runspace;
+                query.AddCommand("Get-Mailbox").AddParameter("Identity", identity.Trim()).AddParameter("ErrorAction", "Stop");
+                var mailboxes = InvokePipeline(query);
+                if (query.HadErrors) throw BuildPipelineException(query);
+                if (mailboxes.Count != 1 || mailboxes[0].Properties["RecipientTypeDetails"]?.Value?.ToString() != "UserMailbox")
+                    throw new InvalidOperationException("Both organizers must be user mailboxes in the connected Exchange Online organization. Shared and group mailboxes cannot be transferred.");
+                var address = mailboxes[0].Properties["PrimarySmtpAddress"]?.Value?.ToString();
+                if (string.IsNullOrWhiteSpace(address)) throw new InvalidOperationException("Organizer mailbox has no SMTP address.");
+                return address;
+            }
+
+            var current = ResolveOrganizer(request.CurrentOrganizer);
+            var next = ResolveOrganizer(request.NewOrganizer);
+            if (string.Equals(current, next, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("The current and new organizer must be different mailboxes.");
+            using var capability = PowerShell.Create();
+            capability.Runspace = _runspace;
+            capability.AddCommand("Get-Command").AddParameter("Name", "Invoke-ChangeMeetingOrganizer").AddParameter("ErrorAction", "Stop");
+            var commands = InvokePipeline(capability);
+            if (capability.HadErrors) throw BuildPipelineException(capability);
+            if (commands.Count != 1) throw new InvalidOperationException("Organizer transfer is not available in this Exchange session.");
+            return request with { CurrentOrganizer = current, NewOrganizer = next, Selector = request.Selector.Trim(), TransferSeriesStartDate = request.TransferSeriesStartDate?.Date };
+        });
+
+        public Task<IReadOnlyList<MeetingOrganizerMatch>> PreviewMeetingOrganizerChangeAsync(MeetingOrganizerRequest request) =>
+            RunMeetingOrganizerCommandAsync(request, true);
+
+        public Task<IReadOnlyList<MeetingOrganizerMatch>> ChangeMeetingOrganizerAsync(MeetingOrganizerRequest request) =>
+            RunMeetingOrganizerCommandAsync(request, false);
+
+        private async Task<IReadOnlyList<MeetingOrganizerMatch>> RunMeetingOrganizerCommandAsync(MeetingOrganizerRequest request, bool preview)
+        {
+            var validated = await ValidateMeetingOrganizerChangeAsync(request);
+            return await RunOnStaThreadAsync(() =>
+            {
+                using var command = PowerShell.Create();
+                command.Runspace = _runspace;
+                command.AddCommand("Invoke-ChangeMeetingOrganizer").AddParameter("Identity", validated.CurrentOrganizer)
+                    .AddParameter("NewOrganizer", validated.NewOrganizer)
+                    .AddParameter(validated.UseEventId ? "EventId" : "Subject", validated.Selector)
+                    .AddParameter("Confirm", false).AddParameter("ErrorAction", "Stop");
+                if (preview) command.AddParameter("WhatIf", true);
+                if (validated.TransferSeriesStartDate.HasValue)
+                    command.AddParameter("TransferSeriesStartDate", validated.TransferSeriesStartDate.Value);
+                var results = InvokePipeline(command);
+                if (command.HadErrors) throw BuildPipelineException(command);
+                return results.Select(result =>
+                {
+                    var eventId = result.Properties["EventId"]?.Value?.ToString();
+                    if (string.IsNullOrWhiteSpace(eventId))
+                        throw new InvalidOperationException("Exchange returned unexpected transfer output. The result is unconfirmed; check the organizers' calendars before retrying.");
+                    return new MeetingOrganizerMatch(eventId, result.Properties["Subject"]?.Value?.ToString() ?? "(No subject returned)");
+                }).ToArray();
+            });
+        }
 
         // --- Full Access / Send As / Send on Behalf ---
 

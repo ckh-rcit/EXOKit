@@ -68,6 +68,7 @@
                     <NavigationViewItem x:Name="NavItemGroups" Content="Groups" Tag="Groups" Icon="People" />
                     <NavigationViewItem x:Name="NavItemCreateGroup" Content="Create Group" Tag="CreateGroup" Icon="AddFriend" />
                     <NavigationViewItem x:Name="NavItemGroupSettings" Content="Group Settings" Tag="GroupSettings" Icon="Manage" />
+                    <NavigationViewItem x:Name="NavItemCalendar" Content="Calendar" Tag="Calendar" Icon="CalendarWeek" />
                     <NavigationViewItem x:Name="NavItemBookings" Content="Bookings" Tag="Bookings" Icon="Calendar" />
                     <NavigationViewItemSeparator />
                     <NavigationViewItem x:Name="NavItemRecipientLookup" Content="Recipient Lookup" Tag="RecipientLookup" Icon="Find" />
@@ -446,6 +447,111 @@
                         <Button x:Name="ButtonEnableBookings" Content="Enable Bookings Access" Click="ButtonEnableBookings_Click" />
                     </StackPanel>
                 </ScrollViewer>
+
+                <Pivot x:Name="PanelCalendar" Visibility="Collapsed">
+                    <PivotItem Header="Permissions" HorizontalContentAlignment="Stretch">
+                        <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto"
+                                      HorizontalContentAlignment="Stretch" HorizontalAlignment="Left" MaxWidth="840">
+                            <StackPanel Spacing="16" Padding="8,12,8,16">
+                                <Grid ColumnSpacing="16">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox x:Name="TextBoxCalendarOwner" Header="Calendar owner" PlaceholderText="Mailbox email or alias" />
+                                    <TextBox x:Name="TextBoxCalendarUser" Grid.Column="1" Header="User or security group" PlaceholderText="Email, UPN, or alias" />
+                                </Grid>
+                                <ComboBox x:Name="ComboBoxCalendarRole" Header="Permission role" Width="240" />
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Button x:Name="ButtonLoadCalendarPermission" Click="ButtonLoadCalendarPermission_Click" IsEnabled="False" AutomationProperties.Name="Load calendar permission">
+                                        <StackPanel Orientation="Horizontal" Spacing="8"><SymbolIcon Symbol="Find" /><TextBlock Text="Load current" /></StackPanel>
+                                    </Button>
+                                    <Button x:Name="ButtonSetCalendarPermission" Click="ButtonSetCalendarPermission_Click" IsEnabled="False" Style="{StaticResource AccentButtonStyle}" AutomationProperties.Name="Set calendar permission">
+                                        <StackPanel Orientation="Horizontal" Spacing="8"><SymbolIcon Symbol="Save" /><TextBlock Text="Set permission" /></StackPanel>
+                                    </Button>
+                                    <Button x:Name="ButtonRemoveCalendarPermission" Click="ButtonRemoveCalendarPermission_Click" IsEnabled="False" AutomationProperties.Name="Remove calendar permission entry">
+                                        <StackPanel Orientation="Horizontal" Spacing="8"><SymbolIcon Symbol="Delete" /><TextBlock Text="Remove entry" /></StackPanel>
+                                    </Button>
+                                </StackPanel>
+                                <InfoBar x:Name="CalendarPermissionStatus" IsOpen="True" IsClosable="False" Severity="Informational" Title="EXO not connected" />
+                                <TextBlock x:Name="TextBlockCalendarPermission" Text="Current: Not loaded" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+                            </StackPanel>
+                        </ScrollViewer>
+                    </PivotItem>
+                    <PivotItem Header="Meeting Organizer" HorizontalContentAlignment="Stretch">
+                        <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto"
+                                      HorizontalContentAlignment="Stretch" HorizontalAlignment="Left" MaxWidth="840">
+                            <StackPanel Spacing="16" Padding="8,12,8,16">
+                                <Grid ColumnSpacing="16">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox x:Name="TextBoxCurrentOrganizer" Header="Current organizer" PlaceholderText="User mailbox email or alias" />
+                                    <TextBox x:Name="TextBoxNewOrganizer" Grid.Column="1" Header="New organizer" PlaceholderText="User mailbox email or alias" />
+                                </Grid>
+                                <Grid ColumnSpacing="16">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="160" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <ComboBox x:Name="ComboBoxMeetingSelector" Header="Match by" SelectedIndex="0" HorizontalAlignment="Stretch">
+                                        <ComboBoxItem Content="Event ID" />
+                                        <ComboBoxItem Content="Subject" />
+                                    </ComboBox>
+                                    <TextBox x:Name="TextBoxMeetingSelector" Grid.Column="1" Header="Series Event ID" />
+                                </Grid>
+                                <StackPanel Orientation="Horizontal" Spacing="16">
+                                    <CheckBox x:Name="CheckBoxTransferDate" Content="Future start date" VerticalAlignment="Center" />
+                                    <CalendarDatePicker x:Name="DatePickerTransferStart" IsEnabled="False" PlaceholderText="Select date" AutomationProperties.Name="Transfer series start date" />
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Button x:Name="ButtonPreviewMeetingOrganizer" Click="ButtonPreviewMeetingOrganizer_Click" IsEnabled="False" AutomationProperties.Name="Preview meeting organizer change">
+                                        <StackPanel Orientation="Horizontal" Spacing="8"><SymbolIcon Symbol="Preview" /><TextBlock Text="Preview change" /></StackPanel>
+                                    </Button>
+                                    <Button x:Name="ButtonChangeMeetingOrganizer" Click="ButtonChangeMeetingOrganizer_Click" IsEnabled="False" Style="{StaticResource AccentButtonStyle}" AutomationProperties.Name="Change meeting organizer">
+                                        <StackPanel Orientation="Horizontal" Spacing="8"><SymbolIcon Symbol="Switch" /><TextBlock Text="Change organizer" /></StackPanel>
+                                    </Button>
+                                </StackPanel>
+                                <InfoBar x:Name="MeetingOrganizerStatus" IsOpen="True" IsClosable="False" Severity="Informational" Title="EXO not connected" />
+                                <StackPanel x:Name="MeetingMatchesPanel" Visibility="Collapsed" Spacing="8">
+                                    <TextBlock Text="Matching meetings" FontWeight="SemiBold" />
+                                    <ListView x:Name="ListViewMeetingMatches" SelectionMode="Single" MaxHeight="200" SelectionChanged="ListViewMeetingMatches_SelectionChanged" AutomationProperties.Name="Matching meetings">
+                                        <ListView.ItemContainerStyle><Style TargetType="ListViewItem"><Setter Property="HorizontalContentAlignment" Value="Stretch" /></Style></ListView.ItemContainerStyle>
+                                        <ListView.ItemTemplate>
+                                            <DataTemplate x:DataType="services:MeetingOrganizerMatch">
+                                                <StackPanel Spacing="4" Padding="4,8">
+                                                    <TextBlock Text="{x:Bind Subject}" TextWrapping="Wrap" />
+                                                    <TextBlock Text="{x:Bind EventId}" TextWrapping="Wrap" FontSize="12" Opacity="0.7" />
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ListView.ItemTemplate>
+                                    </ListView>
+                                </StackPanel>
+                                <Grid ColumnSpacing="12">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                    <TextBlock x:Name="TextBlockCalendarTransferCount" Text="Operation history: 0" VerticalAlignment="Center" />
+                                    <Button x:Name="ButtonExportCalendarTransfers" Grid.Column="1" Click="ButtonExportCalendarTransfers_Click" IsEnabled="False" AutomationProperties.Name="Export organizer results to CSV">
+                                        <StackPanel Orientation="Horizontal" Spacing="8"><SymbolIcon Symbol="Download" /><TextBlock Text="Export CSV" /></StackPanel>
+                                    </Button>
+                                    <Button x:Name="ButtonClearCalendarTransfers" Grid.Column="2" Click="ButtonClearCalendarTransfers_Click" IsEnabled="False" ToolTipService.ToolTip="Clear operation history" AutomationProperties.Name="Clear organizer operation history"><SymbolIcon Symbol="Clear" /></Button>
+                                </Grid>
+                                <ListView x:Name="ListViewCalendarTransfers" SelectionMode="None" MaxHeight="200" AutomationProperties.Name="Organizer operation history">
+                                    <ListView.ItemContainerStyle><Style TargetType="ListViewItem"><Setter Property="HorizontalContentAlignment" Value="Stretch" /></Style></ListView.ItemContainerStyle>
+                                    <ListView.ItemTemplate>
+                                        <DataTemplate x:DataType="services:CalendarTransferRecord">
+                                            <StackPanel Spacing="4" Padding="4,8">
+                                                <TextBlock Text="{x:Bind Status}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                                <TextBlock Text="{x:Bind Selector}" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+                                                <TextBlock Text="{x:Bind Details}" TextWrapping="Wrap" FontSize="12" Opacity="0.7" IsTextSelectionEnabled="True" />
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ListView.ItemTemplate>
+                                </ListView>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </PivotItem>
+                </Pivot>
 
                 <!-- Recipient Lookup -->
                 <Grid x:Name="PanelRecipientLookup" Padding="8" RowSpacing="8" Visibility="Collapsed">

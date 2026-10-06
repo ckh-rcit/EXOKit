@@ -20,6 +20,8 @@ Ported with feature parity from the original toolkit:
   connection-requirement checks, and the same validation poll pattern.
 - **Bookings** — Adds users to the configured Bookings license group and sets their OWA mailbox
   policy to enable Microsoft Bookings, with already-exists/already-set short-circuits.
+- **Calendar** - Read/set/remove explicit default-calendar permissions and preview or submit
+  meeting-organizer changes, with confirmation, per-operation results, and CSV export.
 - **Recipient Lookup** — Resolves multiple recipient identities and reports a friendly recipient type
   (User/Shared/Room/Equipment Mailbox, Distribution Group, Microsoft 365 Group, or a raw
   `RecipientType (RecipientTypeDetails)` fallback). Paste one identity per line or import a TXT/CSV
@@ -40,7 +42,6 @@ Ported with feature parity from the original toolkit:
 The following sections from the original toolkit are **not** ported to EXOKit, per project scope:
 
 - **User Provisioning** — new-user mailbox/license provisioning workflows.
-- **Calendar Tools** — calendar permission management.
 
 ## Architecture
 
@@ -91,6 +92,71 @@ mailbox status, object ID, creation time (UTC), and business phone numbers.
 Cancel retains completed directory results and marks unchecked mailboxes. Editing the query
 or search options, disconnecting, or saving connection settings clears old results.
 Search and mailbox checks make no directory changes. Entra Scout remains a separate, unchanged app.
+
+### Calendar
+
+Calendar uses the existing EXO connection; it does not add Graph scopes or another sign-in.
+The Permissions tab resolves the owner's default calendar by folder type, including localized
+folder names. Load current resolves a specific mail-enabled user or security group and displays
+their explicit rights and delegate flags. Set permission adds a missing entry or replaces an
+existing entry; Remove entry deletes only that principal's entry. `None` is an explicit role,
+not a missing entry. Default or group-based access may still apply after removal.
+
+Writes re-read the loaded state and reject stale permissions. Known transient EXO null-reference
+errors use retry-and-verify handling; unreadable results never count as absence or success.
+Notification and delegate parameters are omitted. An existing delegate cannot be changed to
+a non-Editor role here; manage delegate settings separately. Default and Anonymous are excluded.
+
+Meeting Organizer accepts a series Event ID or subject and an optional future start date.
+Both organizers must resolve to different user mailboxes in the connected organization.
+Preview change validates those mailboxes and runs `Invoke-ChangeMeetingOrganizer -WhatIf`;
+it makes no changes and is required before Change organizer. A successful preview is not a
+guarantee that the later transfer will succeed. Input changes invalidate the preview.
+When Exchange returns subject matches, select the intended series and preview its Event ID.
+
+Transfers run once after confirmation, without automatic retry. Only the default calendar is
+supported; shared/group/resource mailbox transfers are excluded. The previous organizer is
+not retained as an attendee. External/on-premises attendees receive cancellation and invitation
+messages and must RSVP again. Teams online-meeting ownership and linked-file access do not
+transfer. Earlier instances stay with the old organizer and cannot be transferred again.
+Without a future start date, Exchange transfers from the next instance; there is no end-date cap.
+Tenant availability and Exchange RBAC can still block the command.
+
+Operation history records previews, returned candidates, failures, cancellations, and commands
+that completed with an independently unverified calendar outcome. Export CSV preserves those
+statuses and escapes spreadsheet formulas. Permission ticket notes require read-back verification;
+organizer notes explicitly mark the calendar outcome unconfirmed. Disconnecting or changing the
+EXO tenant clears calendar validation and history. Export history before disconnecting.
+
+Validated against Microsoft Learn:
+- [Folder discovery](https://learn.microsoft.com/powershell/module/exchangepowershell/get-exomailboxfolderstatistics)
+  and [permission reads](https://learn.microsoft.com/powershell/module/exchangepowershell/get-exomailboxfolderpermission).
+- [Add](https://learn.microsoft.com/powershell/module/exchangepowershell/add-mailboxfolderpermission),
+  [set](https://learn.microsoft.com/powershell/module/exchangepowershell/set-mailboxfolderpermission), and
+  [remove](https://learn.microsoft.com/powershell/module/exchangepowershell/remove-mailboxfolderpermission)
+  permission roles, principal types, and delegate/notification behavior.
+- [Organizer transfer](https://learn.microsoft.com/powershell/module/exchangepowershell/invoke-changemeetingorganizer)
+  selectors, WhatIf, future dates, subject ambiguity, and transfer limitations.
+
+#### Bulk script comparison
+
+The supplied `ChangeMeetingOrganizer.ps1` was reviewed without execution. Its preview/reporting
+ideas informed the no-change preview and CSV history. Upcoming-meeting discovery, CSV organizer
+batches, lead-time filtering, appointment inclusion, and certificate/scheduled execution remain
+follow-ups, not features of this release. Existing authentication is unchanged.
+
+A discovery implementation must page [calendarView](https://learn.microsoft.com/graph/api/user-list-calendarview),
+filter cancelled and attendee-only events, and deduplicate occurrences by series-master ID.
+It must find the earliest qualifying occurrence across all pages before applying lead time;
+the supplied script retains the first encountered occurrence without establishing that order.
+Its discovery horizon does not limit the transferred series, and it does not send a future
+`TransferSeriesStartDate`. Preview results need to make that distinction explicit.
+
+[Delegated calendar access](https://learn.microsoft.com/graph/outlook-get-shared-events-calendars)
+requires existing sharing/delegation: `Calendars.Read.Shared` does not grant administrators
+arbitrary mailbox access. Broad app-only discovery would require separately approved permissions
+and mailbox scoping. CSV batches also need validated headers/identities and conflict checks;
+the supplied script does not explicitly reject self-transfers or conflicting organizer mappings.
 
 ### Reporting
 
