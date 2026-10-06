@@ -1,0 +1,1211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>EXOKit Showcase</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: a fixed 1920x1080 stage scaled to fit; caption column on the left, the persistent EXOKit window on the right, chapter list below. */
+:root {
+  --page: #E4E4E0; --paper: #EFEFEC; --ink: #1B1B1A; --muted: #5B5B57; --line: #D3D3CE;
+  --amber: #F2B42C; --amber-ink: #855700; --ok: #1F7A4D; --chip: #FFFFFF; --shadow: rgba(30, 30, 25, .30);
+  --display: "Bahnschrift", "Barlow", "Segoe UI", sans-serif;
+  --ui: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --mono: "Cascadia Mono", "Cascadia Code", Consolas, ui-monospace, monospace;
+  --w-canvas: #0A0A0A; --w-pane: #101010; --w-surface: #141414; --w-ctl: #1C1C1C; --w-ctl-line: #303030;
+  --w-border: #2B2B2B; --w-muted: #A1A1A1; --w-text: #EDEDED; --w-dim: #5E5E5E; --w-on: #6EE7A0; --w-edge: rgba(0, 0, 0, .16);
+  --log-ok: #32CD32; --log-warn: #FFA500; --log-sum: #00FFFF; --log-ticket: #87CEFA;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --page: #0F0F0E; --paper: #191918; --ink: #ECECE8; --muted: #A4A49E; --line: #33332F;
+    --amber-ink: #F2B42C; --ok: #6EE7A0; --chip: #242422; --shadow: rgba(0, 0, 0, .65); --w-edge: #333331;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --page: #0F0F0E; --paper: #191918; --ink: #ECECE8; --muted: #A4A49E; --line: #33332F;
+  --amber-ink: #F2B42C; --ok: #6EE7A0; --chip: #242422; --shadow: rgba(0, 0, 0, .65); --w-edge: #333331;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 16px/1.5 var(--ui); }
+.page { max-width: 1520px; margin-inline: auto; padding-inline: clamp(16px, 3vw, 40px); padding-block: 20px 56px; display: flex; flex-direction: column; gap: 14px; }
+.top { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 24px; }
+.top .brand { display: flex; align-items: center; gap: 10px; font: 600 22px/1 var(--display); }
+.top .brand .appicon { width: 26px; height: 26px; align-self: center; }
+.top .brand span:last-child { font: 400 15px/1 var(--ui); color: var(--muted); }
+.top p { margin: 0; color: var(--muted); font-size: 14px; }
+
+.appicon { display: inline-block; flex: none; background: url(data:image/png;base64,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) center / contain no-repeat; }
+
+.viewport { position: relative; width: 100%; max-width: 100%; aspect-ratio: 16 / 9; overflow: hidden; border-radius: 12px; background: var(--paper); box-shadow: 0 0 0 1px var(--line), 0 24px 60px -36px var(--shadow); }
+.viewport:fullscreen { width: 100vw; height: 100vh; aspect-ratio: auto; border-radius: 0; box-shadow: none; }
+.stage { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; transform-origin: 0 0; overflow: hidden; background: var(--paper); }
+.stage p, .stage h1, .stage h2, .stage ul, .stage ol { margin: 0; padding: 0; }
+.stage ul, .stage ol { list-style: none; }
+
+.controls { display: flex; align-items: center; gap: 8px; }
+.controls button { flex: none; width: 40px; height: 40px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 8px; background: var(--chip); color: var(--ink); cursor: pointer; }
+.controls button:hover { border-color: var(--muted); }
+.controls button:focus-visible, .chapters button:focus-visible, .bar button:focus-visible { outline: 2px solid var(--amber-ink); outline-offset: 2px; }
+.controls svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.controls #bPlay svg .pz { fill: currentColor; stroke: none; }
+.bar { flex: 1; min-width: 0; display: flex; gap: 3px; height: 40px; align-items: center; }
+.bar button { flex: 1 1 0; min-width: 0; height: 40px; padding: 0; border: 0; background: none; cursor: pointer; display: flex; align-items: center; border-radius: 3px; }
+.bar button span { position: relative; display: block; width: 100%; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.bar button span i { position: absolute; inset: 0; background: var(--amber); transform-origin: 0 50%; transform: scaleX(0); }
+.bar button:hover span { background: var(--muted); }
+.time { flex: none; font: 13px/1 var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; min-width: 92px; text-align: right; }
+
+.chapters { list-style: none; margin: 6px 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px; }
+.chapters button { width: 100%; height: 100%; text-align: left; display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--chip); color: var(--ink); font: inherit; cursor: pointer; }
+.chapters button:hover { border-color: var(--muted); }
+.chapters button[aria-current="step"] { border-color: var(--amber); box-shadow: inset 3px 0 0 var(--amber); }
+.chapters .n { grid-row: span 2; font: 500 13px/1.6 var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.chapters b { font-weight: 600; font-size: 15px; line-height: 1.3; }
+.chapters small { font-size: 13px; color: var(--muted); line-height: 1.35; }
+.nojs { color: var(--muted); font-size: 14px; margin: 0; }
+
+/* stage: captions */
+.sx { visibility: hidden; }
+.sx.on { visibility: visible; }
+.brandbar { position: absolute; left: 112px; top: 56px; display: flex; align-items: center; gap: 14px; font: 600 28px/1 var(--display); }
+.brandbar .appicon { width: 40px; height: 40px; }
+.brandbar .count { font: 500 20px/1 var(--mono); color: var(--muted); letter-spacing: .04em; font-variant-numeric: tabular-nums; }
+.brandbar .count::before { content: ""; display: inline-block; width: 1px; height: 22px; background: var(--line); margin: 0 14px -4px 0; }
+.cap { position: absolute; left: 112px; top: 168px; width: 580px; height: 820px; display: flex; flex-direction: column; gap: 30px; }
+.eyebrow { display: flex; align-items: center; gap: 12px; font: 500 21px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--amber-ink); }
+.eyebrow i { width: 14px; height: 14px; border-radius: 3px; background: var(--amber); }
+.cap h2 { font: 600 70px/1.03 var(--display); letter-spacing: -.005em; text-wrap: balance; }
+.lede { font: 400 27px/1.45 var(--ui); color: var(--muted); text-wrap: pretty; }
+.cap .facts { margin-top: auto; display: flex; flex-direction: column; }
+.facts li { display: flex; gap: 14px; padding-block: 14px; border-top: 1px solid var(--line); font: 400 21px/1.45 var(--ui); }
+.facts li::before { content: ""; flex: none; width: 8px; height: 8px; margin-top: 11px; border-radius: 2px; background: var(--amber); }
+.mono { font-family: var(--mono); }
+
+.cap.cover { top: 150px; gap: 26px; }
+.cover .appicon { width: 120px; height: 120px; }
+.cover h1 { font: 700 156px/.9 var(--display); letter-spacing: -.01em; }
+.cover .lede { font-size: 34px; color: var(--ink); }
+.chips { display: flex; flex-wrap: wrap; gap: 10px; }
+.chips li { padding: 10px 16px; border: 1px solid var(--line); border-radius: 999px; background: var(--chip); font: 400 20px/1.2 var(--ui); }
+.cap .hint { margin-top: auto; font: 400 19px/1.4 var(--mono); color: var(--muted); }
+.hint kbd { font: inherit; padding: 2px 8px; border: 1px solid var(--line); border-radius: 5px; background: var(--chip); color: var(--ink); }
+.getit { display: flex; flex-direction: column; gap: 6px; padding: 22px 24px; border-radius: 10px; background: var(--chip); border: 1px solid var(--line); }
+.getit span { font: 500 18px/1.2 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.getit a { font: 600 34px/1.2 var(--display); color: var(--ink); text-decoration-color: var(--amber); text-underline-offset: 6px; }
+
+/* caption graphics */
+.gfx { display: flex; flex-direction: column; gap: 14px; }
+.gfx-label { display: flex; justify-content: space-between; align-items: baseline; font: 500 19px/1.2 var(--mono); color: var(--muted); letter-spacing: .02em; }
+.swap { display: inline-grid; }
+.swap > * { grid-area: 1 / 1; }
+.swap > .b { opacity: 0; }
+.ticks { display: grid; grid-template-columns: repeat(15, 1fr); gap: 6px; }
+.ticks i { position: relative; height: 34px; border-radius: 4px; border: 1.5px solid var(--line); overflow: hidden; }
+.ticks i b { position: absolute; inset: -1.5px; }
+.ticks i.f b { background: var(--muted); }
+.ticks i.g b { background: var(--ok); }
+.tick-scale { display: flex; justify-content: space-between; font: 400 18px/1 var(--mono); color: var(--muted); }
+.okt { color: var(--ok); font-weight: 600; }
+
+.route { display: grid; grid-template-columns: 1fr 64px 1fr; align-items: center; row-gap: 18px; }
+.route .node { padding: 14px 16px; border-radius: 8px; background: var(--chip); border: 1px solid var(--line); display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.route .node b { font: 600 20px/1.2 var(--ui); overflow-wrap: anywhere; }
+.route .node small { font: 400 18px/1.25 var(--mono); color: var(--muted); overflow-wrap: anywhere; }
+.route .node.dst { border-color: var(--amber); }
+.route .wire { position: relative; height: 2px; background: var(--ink); transform-origin: 0 50%; }
+.route .wire::after { content: ""; position: absolute; right: -2px; top: -6px; border: 7px solid transparent; border-left: 10px solid var(--ink); border-right: 0; }
+
+.steps { display: flex; flex-direction: column; }
+.steps li { position: relative; display: grid; grid-template-columns: 40px 1fr; gap: 16px; align-items: start; padding-bottom: 18px; }
+.steps li:last-child { padding-bottom: 0; }
+.steps li::after { content: ""; position: absolute; left: 19px; top: 40px; bottom: 0; width: 2px; background: var(--line); }
+.steps li:last-child::after { display: none; }
+.steps .k { position: relative; z-index: 1; width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; font: 600 18px/1 var(--mono); background: var(--amber); color: #1B1B1A; }
+.steps .t { display: flex; flex-direction: column; gap: 2px; padding-top: 6px; }
+.steps b { font: 600 22px/1.25 var(--ui); }
+.steps small { font: 400 18px/1.35 var(--mono); color: var(--muted); }
+
+.gate { display: grid; grid-template-columns: 1fr 72px 1fr; align-items: center; }
+.gate .node { position: relative; padding: 16px 18px; border-radius: 8px; border: 1px solid var(--line); background: var(--chip); display: flex; flex-direction: column; gap: 4px; }
+.gate .node b { font: 600 21px/1.2 var(--ui); }
+.gate .node small { font: 400 18px/1.2 var(--mono); color: var(--muted); }
+.gate .lock { justify-self: center; width: 40px; height: 44px; }
+.gate .lock svg { width: 40px; height: 44px; fill: none; stroke: var(--ink); stroke-width: 2.5; stroke-linecap: round; }
+.gate .hl { position: absolute; inset: -1px; border: 2px solid var(--amber); border-radius: 8px; }
+
+.inputs { display: flex; flex-wrap: wrap; gap: 10px; }
+.inputs li { padding: 10px 14px; border-radius: 8px; background: var(--chip); border: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; }
+.inputs b { font: 500 20px/1.2 var(--mono); }
+.inputs small { font: 400 17px/1.2 var(--ui); color: var(--muted); }
+
+/* the EXOKit window */
+.win { position: absolute; left: 748px; top: 92px; width: 1096px; height: 896px; border-radius: 10px; overflow: hidden; background: var(--w-canvas); color: var(--w-text); font: 15px/1.4 var(--ui); box-shadow: 0 0 0 1px var(--w-edge), 0 60px 100px -50px var(--shadow), 0 24px 48px -28px var(--shadow); }
+.cam { position: absolute; inset: 0; transform-origin: 0 0; }
+.ic { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.tb { position: absolute; left: 0; right: 0; top: 0; height: 40px; display: flex; align-items: center; gap: 10px; padding-left: 14px; background: var(--w-pane); font-size: 13px; }
+.tb .appicon { width: 18px; height: 18px; }
+.tb .ver { color: var(--w-muted); }
+.tb .caps { margin-left: auto; display: flex; height: 100%; }
+.tb .caps span { width: 46px; display: grid; place-items: center; color: var(--w-muted); }
+.tb .caps svg { width: 11px; height: 11px; }
+.wbody { position: absolute; top: 40px; left: 0; right: 0; bottom: 0; display: grid; grid-template-columns: 236px minmax(0, 1fr); }
+.nav { position: relative; background: var(--w-pane); padding: 2px 6px; }
+.nav .hb { height: 40px; display: flex; align-items: center; padding-left: 14px; }
+.nav .hb svg, .ni svg { width: 18px; height: 18px; flex: none; }
+.ni { position: relative; z-index: 1; height: 38px; display: flex; align-items: center; gap: 14px; padding-left: 14px; font-size: 14.5px; white-space: nowrap; }
+.nsep { height: 1px; background: var(--w-border); margin: 6px 8px; }
+.sel, .spot { position: absolute; left: 6px; top: 0; width: 224px; height: 38px; border-radius: 5px; }
+.sel { background: rgba(255, 255, 255, .075); }
+.sel::before { content: ""; position: absolute; left: 0; top: 11px; width: 3px; height: 16px; border-radius: 2px; background: var(--w-text); }
+.spot { border: 1.5px solid var(--amber); background: rgba(242, 180, 44, .12); opacity: 0; z-index: 2; }
+
+.ws { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 20px 26px 12px; }
+.hdr { flex: none; border-bottom: 1px solid var(--w-border); padding-bottom: 14px; margin-bottom: 18px; }
+.ttl-row { display: flex; align-items: center; gap: 12px; }
+.ttl { font-size: 24px; font-weight: 600; line-height: 1.3; }
+.ring { width: 20px; height: 20px; border-radius: 50%; border: 2.5px solid rgba(237, 237, 237, .16); border-top-color: var(--w-text); opacity: 0; animation: spin .9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.conn { display: flex; align-items: center; gap: 16px; margin-top: 10px; font-size: 12.5px; color: var(--w-muted); }
+.st { display: flex; align-items: center; gap: 8px; }
+.dot { position: relative; width: 8px; height: 8px; }
+.dot i { position: absolute; inset: 0; border-radius: 50%; }
+.dot .off { border: 1px solid var(--w-muted); }
+.dot .on { background: var(--w-on); opacity: 0; }
+.globe { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 4px; color: var(--w-text); }
+.globe svg { width: 19px; height: 19px; }
+
+.content { position: relative; flex: 1; min-height: 0; }
+.pv { position: absolute; inset: 0; padding: 2px; }
+.out { flex: none; height: 268px; display: flex; flex-direction: column; }
+.ws.nolog .out { display: none; }
+.grip { position: relative; height: 16px; flex: none; }
+.grip::before { content: ""; position: absolute; left: 0; right: 0; top: 8px; height: 1px; background: var(--w-border); }
+.grip::after { content: ""; position: absolute; left: calc(50% - 16px); top: 7px; width: 32px; height: 3px; border-radius: 2px; background: var(--w-muted); }
+.otb { flex: none; display: flex; align-items: center; gap: 10px; margin-top: 4px; font-size: 12px; color: var(--w-muted); }
+.otb .tk { width: 140px; height: 28px; padding: 0 8px; display: flex; align-items: center; border-radius: 4px; background: var(--w-ctl); border: 1px solid var(--w-ctl-line); border-bottom-color: #8A8A8A; color: var(--w-text); font-size: 12px; }
+.otb .wn { margin-left: auto; display: flex; align-items: center; gap: 8px; color: var(--w-text); }
+.otb .chev { width: 32px; height: 28px; display: grid; place-items: center; color: var(--w-text); }
+.otb .chev svg { width: 14px; height: 14px; }
+.piv { flex: none; position: relative; display: flex; align-items: center; gap: 26px; height: 40px; padding-left: 2px; }
+.piv .tab { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
+.piv .tab .n { font: 12px/1 var(--mono); color: var(--w-muted); }
+.piv .tab .cp { width: 24px; height: 24px; display: grid; place-items: center; color: var(--w-muted); }
+.piv .tab .cp svg { width: 14px; height: 14px; }
+.piv .ul { position: absolute; left: 0; bottom: 2px; height: 3px; width: 40px; border-radius: 2px; background: var(--w-text); }
+.logs { position: relative; flex: 1; min-height: 0; border-radius: 4px; background: var(--w-surface); overflow: hidden; }
+.log { position: absolute; inset: 0; padding: 8px 10px 12px; display: flex; flex-direction: column; justify-content: flex-end; overflow: hidden; font: 12.5px/1.5 var(--mono); }
+.log p { white-space: pre-wrap; overflow: hidden; flex: none; }
+.l-ok { color: var(--log-ok); } .l-warn { color: var(--log-warn); } .l-sum { color: var(--log-sum); } .l-tk { color: var(--log-ticket); }
+.notes { justify-content: flex-start; opacity: 0; }
+
+/* WinUI-style controls */
+.flabel { display: block; font-size: 13.5px; opacity: .85; margin-bottom: 8px; }
+.frow { display: flex; gap: 8px; align-items: flex-start; }
+.tbx { position: relative; overflow: hidden; flex: 1; min-width: 0; min-height: 32px; padding: 5px 10px; border-radius: 4px; background: var(--w-ctl); border: 1px solid var(--w-ctl-line); border-bottom-color: #8A8A8A; font-size: 14px; line-height: 20px; }
+.tbx.tall { height: 128px; }
+.tbx.focus { border-bottom: 2px solid var(--w-text); }
+.ty { display: block; width: max-content; max-width: 100%; white-space: nowrap; }
+.ph { color: var(--w-dim); }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 32px; padding: 0 12px; border-radius: 4px; background: var(--w-ctl); border: 1px solid var(--w-ctl-line); border-bottom-color: #3A3A3A; font-size: 14px; white-space: nowrap; flex: none; }
+.btn.accent { background: var(--w-text); border-color: var(--w-text); color: var(--w-canvas); }
+.btn.dis { color: var(--w-dim); background: #141414; border-color: #222; }
+.bswap { display: inline-grid; }
+.bswap > * { grid-area: 1 / 1; }
+.bswap > .b { opacity: 0; }
+.cb { display: inline-flex; align-items: center; gap: 10px; font-size: 14px; white-space: nowrap; }
+.cb i { position: relative; width: 20px; height: 20px; border-radius: 4px; border: 1px solid #8A8A8A; flex: none; }
+.cb i b { position: absolute; inset: -1px; border-radius: 4px; background: var(--w-text); display: grid; place-items: center; }
+.cb i b svg { width: 14px; height: 14px; fill: none; stroke: var(--w-canvas); stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+.cb:not(.on) i b { display: none; }
+.combo { display: flex; align-items: center; justify-content: space-between; height: 32px; padding: 0 10px; border-radius: 4px; background: var(--w-ctl); border: 1px solid var(--w-ctl-line); font-size: 14px; }
+.combo svg { width: 12px; height: 12px; }
+.row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.stack { display: flex; flex-direction: column; gap: 18px; }
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.is-empty .ty { visibility: hidden; }
+.is-empty .cb i b { display: none; }
+
+.ibs { display: grid; }
+.ibs > .ib { grid-area: 1 / 1; }
+.ibs > .ib + .ib { opacity: 0; }
+.ib { display: flex; gap: 12px; align-items: flex-start; padding: 11px 14px; border-radius: 4px; border: 1px solid var(--w-border); background: #181818; font-size: 14px; }
+.ib .ico { width: 16px; height: 16px; border-radius: 50%; flex: none; margin-top: 2px; display: grid; place-items: center; font: 700 11px/1 var(--ui); color: var(--w-canvas); background: var(--w-text); }
+.ib b { font-weight: 600; margin-right: 10px; }
+.ib span { color: #CFCFCF; }
+.ib.ok { background: #1F2A1C; border-color: #2D3B28; } .ib.ok .ico { background: #6CCB5F; }
+.ib.warn { background: #33291A; border-color: #45381F; } .ib.warn .ico { background: #FCE100; }
+
+.tour { display: flex; flex-direction: column; }
+.tour li { display: grid; grid-template-columns: 150px 1fr; gap: 16px; align-items: baseline; padding: 7px 10px; border-bottom: 1px solid #1B1B1B; border-radius: 4px; font-size: 14px; }
+.tour li b { font-weight: 600; }
+.tour li span { color: #BDBDBD; }
+
+.ppiv { display: flex; gap: 26px; position: relative; padding-bottom: 10px; margin-bottom: 18px; font-size: 17px; }
+.ppiv span:first-child { color: var(--w-muted); }
+.ppiv::after { content: ""; position: absolute; left: 118px; bottom: 2px; width: 40px; height: 3px; border-radius: 2px; background: var(--w-text); }
+.fl { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.fl > label { font-size: 13.5px; }
+
+.tbl { display: flex; flex-direction: column; font-size: 13.5px; }
+.tbl .tr { display: grid; align-items: center; gap: 12px; padding: 8px 10px; border-bottom: 1px solid #1D1D1D; }
+.tbl .th { color: var(--w-muted); font-size: 12.5px; font-weight: 600; border-bottom-color: var(--w-border); }
+.tbl .tr > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tbl .sel-row { background: rgba(255, 255, 255, .08); }
+.pend { color: var(--w-dim); }
+.okc { color: #8FE3A6; }
+
+.snaprow { grid-template-columns: 170px 220px 1fr 70px; }
+.fresh { box-shadow: inset 3px 0 0 var(--amber); }
+
+.setsec { display: flex; flex-direction: column; gap: 12px; padding: 16px 18px; border-radius: 6px; background: #121212; border: 1px solid #1F1F1F; }
+.setsec h4 { margin: 0; font-size: 15px; font-weight: 600; }
+.setsec .kv { display: grid; grid-template-columns: 210px 1fr; gap: 12px; align-items: center; font-size: 13.5px; }
+.setsec .kv > span:first-child { color: var(--w-muted); }
+.setsec.hl { border-color: rgba(242, 180, 44, .55); }
+
+/* overlays inside the window */
+.ovl { position: absolute; inset: 0; pointer-events: none; }
+.ptr { position: absolute; left: 0; top: 0; width: 22px; height: 26px; opacity: 0; z-index: 9; filter: drop-shadow(0 2px 3px rgba(0, 0, 0, .5)); }
+.ptr svg { position: absolute; left: 0; top: 0; width: 22px; height: 26px; }
+.ptr .clk { position: absolute; left: -13px; top: -13px; width: 26px; height: 26px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, .85); opacity: 0; }
+.fly { position: absolute; width: 268px; padding: 4px; border-radius: 8px; background: #232323; border: 1px solid #383838; box-shadow: 0 16px 32px rgba(0, 0, 0, .5); opacity: 0; z-index: 5; }
+.fly .mi { display: flex; align-items: center; gap: 12px; height: 36px; padding: 0 12px; border-radius: 4px; font-size: 14px; }
+.fly .mi svg { width: 16px; height: 16px; }
+.fly .mi.dis { color: var(--w-dim); }
+.fly .mi.hov { background: rgba(255, 255, 255, .07); }
+.fly .msep { height: 1px; background: #383838; margin: 4px 0; }
+.smoke { position: absolute; inset: 0; background: rgba(0, 0, 0, .5); opacity: 0; z-index: 6; display: grid; place-items: center; }
+.dlg { width: 500px; border-radius: 8px; overflow: hidden; background: #202020; border: 1px solid #3A3A3A; box-shadow: 0 30px 60px rgba(0, 0, 0, .55); }
+.dlg .bd { padding: 24px; display: flex; flex-direction: column; gap: 12px; font-size: 14px; line-height: 1.45; }
+.dlg h5 { margin: 0; font-size: 20px; font-weight: 600; }
+.dlg .mono { font-size: 12px; color: #CFCFCF; white-space: pre-wrap; }
+.dlg .ft { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 20px 24px; background: #1A1A1A; border-top: 1px solid #2E2E2E; }
+.dlg .ft .btn { width: 100%; }
+.tip { position: absolute; padding: 6px 10px; border-radius: 4px; background: #2B2B2B; border: 1px solid #3A3A3A; font-size: 12.5px; opacity: 0; z-index: 8; white-space: nowrap; }
+
+@media (max-width: 700px) {
+  .controls { flex-wrap: wrap; }
+  .bar { order: 5; flex-basis: 100%; }
+  .time { margin-left: auto; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ring { animation: none; border-color: var(--w-text); border-right-color: rgba(237, 237, 237, .16); }
+}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-mail" viewBox="0 0 24 24"><rect class="ic" x="3" y="5" width="18" height="14" rx="2"/><path class="ic" d="M3.5 7l8.5 6 8.5-6"/></symbol>
+  <symbol id="i-add" viewBox="0 0 24 24"><path class="ic" d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-lib" viewBox="0 0 24 24"><rect class="ic" x="4" y="4" width="4" height="16" rx="1"/><rect class="ic" x="10" y="4" width="4" height="16" rx="1"/><path class="ic" d="M16.2 5.2l3.8-1 3 15.5-3.8 1z" transform="translate(-2 0)"/></symbol>
+  <symbol id="i-people" viewBox="0 0 24 24"><circle class="ic" cx="9" cy="8" r="3.2"/><path class="ic" d="M3 19.5c0-3.2 2.7-5.5 6-5.5s6 2.3 6 5.5"/><circle class="ic" cx="17" cy="9" r="2.4"/><path class="ic" d="M16.5 14.2c2.6 0 4.5 1.8 4.5 4.3"/></symbol>
+  <symbol id="i-addf" viewBox="0 0 24 24"><circle class="ic" cx="10" cy="8" r="3.5"/><path class="ic" d="M3 20c0-3.6 3.1-6 7-6 1.4 0 2.7.3 3.8.9M18 13v7M14.5 16.5h7"/></symbol>
+  <symbol id="i-manage" viewBox="0 0 24 24"><path class="ic" d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle class="ic" cx="15" cy="7" r="2"/><circle class="ic" cx="9" cy="17" r="2"/></symbol>
+  <symbol id="i-calw" viewBox="0 0 24 24"><rect class="ic" x="3" y="5" width="18" height="16" rx="2"/><path class="ic" d="M3 10h18M8 3v4M16 3v4M7 15h10"/></symbol>
+  <symbol id="i-cal" viewBox="0 0 24 24"><rect class="ic" x="3" y="5" width="18" height="16" rx="2"/><path class="ic" d="M3 10h18M8 3v4M16 3v4M8 14h.01M12 14h.01M16 14h.01M8 17.5h.01M12 17.5h.01"/></symbol>
+  <symbol id="i-find" viewBox="0 0 24 24"><circle class="ic" cx="10.5" cy="10.5" r="6"/><path class="ic" d="M20 20l-5-5"/></symbol>
+  <symbol id="i-contact" viewBox="0 0 24 24"><rect class="ic" x="3" y="4" width="18" height="16" rx="2"/><circle class="ic" cx="9" cy="10.5" r="2.3"/><path class="ic" d="M5.5 16.5c.6-1.8 2-2.8 3.5-2.8s2.9 1 3.5 2.8M15 9h3.5M15 13h3.5"/></symbol>
+  <symbol id="i-page" viewBox="0 0 24 24"><path class="ic" d="M6 3h8l4 4v14H6z"/><path class="ic" d="M14 3v4h4M9 12h6M9 16h6"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle class="ic" cx="12" cy="12" r="8.5"/><path class="ic" d="M12 7.5V12l3 2"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle class="ic" cx="12" cy="12" r="3"/><path class="ic" d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle class="ic" cx="12" cy="12" r="9"/><ellipse class="ic" cx="12" cy="12" rx="4" ry="9"/><path class="ic" d="M3.5 9h17M3.5 15h17"/></symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24"><path class="ic" d="M4 6.5h16M4 12h16M4 17.5h16"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect class="ic" x="8" y="8" width="12" height="12" rx="2"/><path class="ic" d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path class="ic" d="M6 9l6 6 6-6"/></symbol>
+  <symbol id="i-cancel" viewBox="0 0 24 24"><path class="ic" d="M6 6l12 12M18 6L6 18"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+</svg>
+
+<div class="page">
+  <header class="top">
+    <div class="brand"><span class="appicon" role="img" aria-label="EXOKit toolbox icon"></span><span>EXOKit</span><span>Team showcase</span></div>
+    <p>12 chapters · about 2 minutes · example tenant: contoso.com</p>
+  </header>
+
+  <div class="viewport" id="viewport">
+    <div class="stage" id="stage" aria-live="off">
+      <div class="brandbar" id="brandbar"><span class="appicon"></span><span>EXOKit</span><span class="count" id="count">01 / 12</span></div>
+
+      <section class="cap cover sx" data-s="0">
+        <span class="appicon c-icon"></span>
+        <h1 class="c-title">EXOKit</h1>
+        <p class="lede c-lede">Exchange Online and Microsoft 365 administration, in a native Windows app.</p>
+        <ul class="chips c-chips"><li>WinUI 3 on .NET 10</li><li>Exchange Online PowerShell, in process</li><li>Microsoft Graph</li><li>ServiceNow, optional</li></ul>
+        <p class="hint c-hint"><kbd>Space</kbd> pause &nbsp; <kbd>&larr;</kbd> <kbd>&rarr;</kbd> chapters &nbsp; <kbd>F</kbd> full screen</p>
+      </section>
+
+      <section class="cap sx" data-s="1">
+        <p class="eyebrow"><i></i>The sidebar</p>
+        <h2>Every routine Exchange request, one window.</h2>
+        <p class="lede">Thirteen sections replace the old WinForms toolkit. Change access, create mailboxes and groups, look things up, and undo removals.</p>
+        <ul class="facts"><li>Ported from the PowerShell Exchange Admin Toolkit with feature parity.</li><li>Only one operation runs at a time, and Cancel stops the active command.</li></ul>
+      </section>
+
+      <section class="cap sx" data-s="2">
+        <p class="eyebrow"><i></i>Connections</p>
+        <h2>Exchange first, then Graph.</h2>
+        <p class="lede">EXOKit hosts a real Exchange Online PowerShell session and a Microsoft Graph client inside the app. Graph must sign in to the same tenant as Exchange.</p>
+        <div class="gfx">
+          <ol class="steps">
+            <li class="cn-1"><span class="k">1</span><span class="t"><b>Exchange Online</b><small>Embedded PowerShell 7.6.6 runspace</small></span></li>
+            <li class="cn-2"><span class="k">2</span><span class="t"><b>Microsoft Graph</b><small>MSAL sign-in, same tenant</small></span></li>
+          </ol>
+        </div>
+        <ul class="facts"><li>Modules are checked and updated before sign-in starts.</li><li>MFA and Conditional Access apply as usual. Nothing is bypassed.</li></ul>
+      </section>
+
+      <section class="cap sx" data-s="3">
+        <p class="eyebrow"><i></i>Mailboxes</p>
+        <h2>Grant access. Then prove it.</h2>
+        <p class="lede">Full Access, Send As and Send on Behalf, for many users and mailboxes in one batch. Each change is read back until Exchange confirms it.</p>
+        <div class="gfx poll">
+          <div class="gfx-label"><span>Read-back</span><span class="swap"><span class="a">every 2 s, up to 15 reads</span><span class="b okt">verified on read 4</span></span></div>
+          <div class="ticks"><i class="f"><b></b></i><i class="f"><b></b></i><i class="f"><b></b></i><i class="g"><b></b></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+          <div class="tick-scale"><span>0 s</span><span>30 s</span></div>
+        </div>
+        <ul class="facts"><li>A state it cannot read stays unconfirmed. It never counts as success.</li></ul>
+      </section>
+
+      <section class="cap sx" data-s="4">
+        <p class="eyebrow"><i></i>Ticket notes</p>
+        <h2>The ticket notes write themselves.</h2>
+        <p class="lede">Every batch ends with a For IT Ticket block. Copy it in one click, or close the ServiceNow ticket from inside EXOKit.</p>
+        <ul class="facts"><li>Only fully verified batches are offered for closure. Partial, cancelled and unconfirmed results are not.</li><li>ServiceNow credentials come from Azure Key Vault.</li></ul>
+      </section>
+
+      <section class="cap sx" data-s="5">
+        <p class="eyebrow"><i></i>Groups</p>
+        <h2>One form for both kinds of group.</h2>
+        <p class="lede">EXOKit resolves each group's type and routes the change to the right service.</p>
+        <div class="gfx route">
+          <div class="node r1"><b>it-alerts@</b><small>MailUniversal&shy;DistributionGroup</small></div>
+          <div class="wire r1w"></div>
+          <div class="node dst r1d"><b>Exchange Online</b><small>Add-Distribution&shy;GroupMember</small></div>
+          <div class="node r2"><b>project-atlas@</b><small>GroupMailbox</small></div>
+          <div class="wire r2w"></div>
+          <div class="node dst r2d"><b>Microsoft Graph</b><small>POST /groups/{id}<br>/members/$ref</small></div>
+        </div>
+        <ul class="facts"><li>Create Group and Group Settings handle new groups, delegates, moderation and join rules.</li></ul>
+      </section>
+
+      <section class="cap sx" data-s="6">
+        <p class="eyebrow"><i></i>Calendar</p>
+        <h2>Move a meeting series to a new organizer.</h2>
+        <p class="lede">A no-change preview runs first. Change organizer unlocks only after it passes, and editing any field locks it again.</p>
+        <div class="gfx gate">
+          <div class="node g1"><em class="hl"></em><b>Preview change</b><small>-WhatIf</small></div>
+          <div class="lock"><svg viewBox="0 0 40 44" aria-hidden="true"><rect x="6" y="20" width="28" height="20" rx="3"/><path class="shackle" d="M12 20v-6a8 8 0 0 1 16 0v6"/></svg></div>
+          <div class="node g2"><b>Change organizer</b><small>runs once, after Yes</small></div>
+        </div>
+        <ul class="facts"><li>The Permissions tab reads, sets and removes default-calendar rights.</li><li>Operation history exports to CSV.</li></ul>
+      </section>
+
+      <section class="cap sx" data-s="7">
+        <p class="eyebrow"><i></i>Recipient Lookup</p>
+        <h2>What is this address, really?</h2>
+        <p class="lede">Paste a list or import a TXT or CSV file. Each identity resolves to a plain recipient type. One failed lookup does not stop the batch.</p>
+        <div class="gfx">
+          <div class="gfx-label"><span>User Search also finds people by</span></div>
+          <ul class="inputs">
+            <li class="u1"><b>Chen, Jordan</b><small>name</small></li>
+            <li class="u2"><b>48213</b><small>employee ID, E48213 first</small></li>
+            <li class="u3"><b>j.chen@contoso.com</b><small>UPN or email</small></li>
+            <li class="u4"><b>jchen</b><small>SAM account</small></li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="cap sx" data-s="8">
+        <p class="eyebrow"><i></i>Reporting</p>
+        <h2>Who has access? One report.</h2>
+        <p class="lede">Group membership and owners, or mailbox permissions, for any target. Export to CSV for the ticket or the audit.</p>
+        <ul class="facts"><li>The banner tells complete, empty, partial, failed and cancelled results apart.</li><li>Exports are protected against spreadsheet formula injection.</li></ul>
+      </section>
+
+      <section class="cap sx" data-s="9">
+        <p class="eyebrow"><i></i>Snapshots</p>
+        <h2>Every removal leaves a way back.</h2>
+        <p class="lede">Before EXOKit removes a permission or role, it saves the current state. Restore puts missing rights back and verifies each one.</p>
+        <div class="gfx">
+          <ol class="steps">
+            <li class="sf-1"><span class="k">1</span><span class="t"><b>Snapshot saved</b><small>tenant-bound, before any change</small></span></li>
+            <li class="sf-2"><span class="k">2</span><span class="t"><b>Removed and verified</b><small>a failed snapshot blocks this step</small></span></li>
+            <li class="sf-3"><span class="k">3</span><span class="t"><b>Restored and verified</b><small>missing rights only</small></span></li>
+          </ol>
+        </div>
+        <ul class="facts"><li>Every Exchange command has a five-minute timeout.</li></ul>
+      </section>
+
+      <section class="cap sx" data-s="10">
+        <p class="eyebrow"><i></i>Install and updates</p>
+        <h2>Install once. Updates arrive by themselves.</h2>
+        <div class="gfx">
+          <ol class="steps">
+            <li class="p1"><span class="k">1</span><span class="t"><b>Tag a release</b><small>vMajor.Minor.Build</small></span></li>
+            <li class="p2"><span class="k">2</span><span class="t"><b>Build and sign the MSIX</b><small>GitHub Actions</small></span></li>
+            <li class="p3"><span class="k">3</span><span class="t"><b>Publish the update feed</b><small>EXOKit.appinstaller on Pages</small></span></li>
+            <li class="p4"><span class="k">4</span><span class="t"><b>Windows updates the app</b><small>on launch and in the background</small></span></li>
+          </ol>
+        </div>
+        <ul class="facts"><li>Settings live in %LOCALAPPDATA%\EXOKit, with a backup of the previous save.</li></ul>
+      </section>
+
+      <section class="cap cover sx" data-s="11">
+        <span class="appicon o-icon"></span>
+        <h1 class="o-title">EXOKit</h1>
+        <p class="lede o-lede">Trust the signing certificate first, then open EXOKit.appinstaller from the download page.</p>
+        <div class="getit o-get"><span>Download page</span><a href="https://ckh-rcit.github.io/EXOKit/" target="_blank" rel="noopener">ckh-rcit.github.io/EXOKit</a></div>
+        <p class="hint o-hint">Setup and app registration steps are in the README.</p>
+      </section>
+
+      <div class="win" id="win" aria-hidden="true">
+        <div class="cam" id="cam">
+          <div class="tb"><span class="appicon"></span><span>EXOKit</span><span class="ver">v1.0.39</span>
+            <span class="caps"><span><svg viewBox="0 0 11 11"><path d="M0 5.5h11" stroke="currentColor"/></svg></span><span><svg viewBox="0 0 11 11"><rect x=".5" y=".5" width="10" height="10" fill="none" stroke="currentColor"/></svg></span><span><svg viewBox="0 0 11 11"><path d="M.5.5l10 10M10.5.5l-10 10" stroke="currentColor"/></svg></span></span>
+          </div>
+          <div class="wbody">
+            <nav class="nav" id="nav">
+              <div class="hb"><svg><use href="#i-menu"/></svg></div>
+              <div class="sel" id="sel"></div>
+              <div class="spot" id="spot"></div>
+            </nav>
+            <div class="ws" id="ws">
+              <div class="hdr">
+                <div class="ttl-row"><span class="ttl" id="ttl">Mailboxes</span><span class="ring" id="ring"></span></div>
+                <div class="conn">
+                  <span class="st"><span class="dot" id="dExo"><i class="off"></i><i class="on"></i></span><span class="swap" id="tExo"><span class="a">EXO offline</span><span class="b">EXO connected</span></span></span>
+                  <span class="st"><span class="dot" id="dGraph"><i class="off"></i><i class="on"></i></span><span class="swap" id="tGraph"><span class="a">Graph offline</span><span class="b">Graph connected</span></span></span>
+                  <span class="globe" id="globe"><svg><use href="#i-globe"/></svg></span>
+                </div>
+              </div>
+              <div class="content" id="content"></div>
+              <div class="out" id="out">
+                <div class="grip"></div>
+                <div class="otb"><span>Ticket</span><span class="tk" id="tk"></span>
+                  <span class="wn"><span class="cb on"><i><b><svg viewBox="0 0 24 24"><use href="#i-check"/></svg></b></i></span>Warnings</span>
+                  <span class="chev"><svg><use href="#i-chev"/></svg></span></div>
+                <div class="piv" id="piv">
+                  <span class="tab" id="tabLog">Log <span class="n" id="nLog">0</span></span>
+                  <span class="tab" id="tabNotes">Ticket Notes <span class="n" id="nNotes">0</span><span class="cp" id="cp"><svg><use href="#i-copy"/></svg></span></span>
+                  <span class="ul" id="ul"></span>
+                </div>
+                <div class="logs" id="logs"></div>
+              </div>
+            </div>
+          </div>
+          <div class="ovl" id="ovl"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button type="button" id="bPrev" aria-label="Previous chapter"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button>
+    <button type="button" id="bPlay" aria-label="Pause"><svg viewBox="0 0 24 24"><g class="ico-pause"><rect class="pz" x="6" y="5" width="4" height="14" rx="1"/><rect class="pz" x="14" y="5" width="4" height="14" rx="1"/></g><path class="pz ico-play" d="M8 5.5v13l11-6.5z" style="display:none"/></svg></button>
+    <button type="button" id="bNext" aria-label="Next chapter"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
+    <div class="bar" id="bar"></div>
+    <span class="time" id="time">0:00 / 2:02</span>
+    <button type="button" id="bFull" aria-label="Full screen"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+  </div>
+  <ol class="chapters" id="chapters"></ol>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+<script>
+(function () {
+  const G = window.gsap;
+  const $ = (s, r = document) => r.querySelector(s);
+  const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
+  const win = $('#win'), cam = $('#cam'), stage = $('#stage'), viewport = $('#viewport');
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const esc = s => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  const ico = id => `<svg><use href="#i-${id}"/></svg>`;
+  const chk = `<i><b><svg viewBox="0 0 24 24"><use href="#i-check"/></svg></b></i>`;
+  const ptrSvg = `<svg viewBox="0 0 22 26"><path d="M2 2v19l5-4.6 3.4 7.4 3.3-1.5-3.3-7.2H17z" fill="#fff" stroke="#111" stroke-width="1.4" stroke-linejoin="round"/></svg><span class="clk"></span>`;
+
+  const NAV = [
+    ['Mailboxes', 'mail'], ['Create Mailbox', 'add'], ['Resources', 'lib'], ['Groups', 'people'], ['Create Group', 'addf'],
+    ['Group Settings', 'manage'], ['Calendar', 'calw'], ['Bookings', 'cal'], null, ['Recipient Lookup', 'find'],
+    ['User Search', 'contact'], ['Reporting', 'page'], ['Snapshots', 'clock'], ['Settings', 'gear']
+  ];
+  const TOUR = [
+    'Full Access, Send As and Send on Behalf on shared mailboxes',
+    'New shared mailboxes with archive and address-list options',
+    'The same permission flow for rooms and equipment',
+    'Member and Owner roles on distribution and Microsoft 365 groups',
+    'Microsoft 365, distribution or mail-enabled security groups, with an optional Team',
+    'Delivery, delegates, moderation and join or leave rules',
+    'Default-calendar permissions and meeting organizer transfer',
+    'Bookings license group and OWA policy in one step',
+    'Paste a list and get each recipient type',
+    'Entra users by name, employee ID, UPN, email or SAM',
+    'Membership and mailbox permission reports, CSV export',
+    'Before-state of every removal, ready to restore',
+    'Connections, Bookings, ServiceNow and the update feed'
+  ];
+
+  const SCENES = [
+    { title: 'Intro', blurb: 'What EXOKit is', nav: 0, page: 'Mailboxes', conn: 0, pane: 'mbIdle', log: 'logEmpty', dur: 7 },
+    { title: 'The sidebar', blurb: 'Thirteen sections, one window', nav: -1, page: 'Overview', conn: 0, pane: 'tour', log: 'logEmpty', dur: 10 },
+    { title: 'Connections', blurb: 'Exchange first, then Graph', nav: 0, page: 'Mailboxes', conn: 0, pane: 'mbIdle', log: 'logConnect', dur: 10 },
+    { title: 'Mailboxes', blurb: 'Grant access, then verify it', nav: 0, page: 'Mailboxes', conn: 2, pane: 'mb', log: 'logMb', dur: 13, ticket: 'TASK0048213' },
+    { title: 'Ticket notes', blurb: 'Copy notes, close the ticket', nav: 0, page: 'Mailboxes', conn: 2, pane: 'mbDone', log: 'logTicket', dur: 11, ticket: 'TASK0048213' },
+    { title: 'Groups', blurb: 'Distribution and Microsoft 365 groups', nav: 3, page: 'Groups', conn: 2, pane: 'groups', log: 'logGroups', dur: 12 },
+    { title: 'Calendar', blurb: 'Organizer transfer with a preview', nav: 6, page: 'Calendar', conn: 2, pane: 'cal', log: 'logCal', dur: 12 },
+    { title: 'Recipient Lookup', blurb: 'Resolve a list of addresses', nav: 8, page: 'Recipient Lookup', conn: 2, pane: 'lookup', log: 'logLookup', dur: 10 },
+    { title: 'Reporting', blurb: 'Who has access, as CSV', nav: 10, page: 'Reporting', conn: 2, pane: 'report', log: null, dur: 9 },
+    { title: 'Snapshots', blurb: 'Every removal can be undone', nav: 11, page: 'Snapshots', conn: 2, pane: 'snap', log: 'logSnap', dur: 12 },
+    { title: 'Install and updates', blurb: 'Signed package, automatic updates', nav: 12, page: 'Settings', conn: 2, pane: 'settings', log: null, dur: 9 },
+    { title: 'Get it', blurb: 'Where to install EXOKit', nav: 0, page: 'Mailboxes', conn: 2, pane: 'mbIdle', log: 'logOutro', dur: 8 }
+  ];
+
+  // ---------- build the window: nav ----------
+  const nav = $('#nav'), navItems = [];
+  NAV.forEach(item => {
+    if (!item) { nav.insertAdjacentHTML('beforeend', '<div class="nsep"></div>'); return; }
+    nav.insertAdjacentHTML('beforeend', `<div class="ni">${ico(item[1])}<span>${item[0]}</span></div>`);
+    navItems.push(nav.lastElementChild);
+  });
+
+  // ---------- panes ----------
+  const content = $('#content');
+  const mbHTML = `
+    <div class="stack">
+      <div class="cols">
+        <div><span class="flabel">Mailbox(es) (one per line, or comma/semicolon separated)</span>
+          <div class="frow"><div class="tbx tall f-t"><span class="ty">helpdesk@contoso.com</span></div><span class="btn">Browse...</span></div></div>
+        <div><span class="flabel">Users</span>
+          <div class="frow"><div class="tbx tall f-u"><span class="ty">j.chen@contoso.com</span><span class="ty">p.raman@contoso.com</span></div><span class="btn">Browse...</span></div></div>
+      </div>
+      <div class="row" style="gap:28px"><span class="cb on c-fa">${chk}Full Access</span><span class="cb on c-sa">${chk}Send As</span><span class="cb">${chk}Send on Behalf</span></div>
+      <div class="row"><span class="btn accent b-add">Add Permissions</span><span class="btn">Remove Permissions</span><span class="btn">Validate Input</span></div>
+    </div>`;
+  const PANES = {
+    mbIdle: `<div class="is-empty">${mbHTML}</div>`,
+    mb: mbHTML,
+    mbDone: mbHTML,
+    tour: `<ul class="tour">${TOUR.map((t, i) => `<li><b>${NAV.filter(Boolean)[i][0]}</b><span>${t}</span></li>`).join('')}</ul>`,
+    groups: `
+      <div class="stack">
+        <div class="cols">
+          <div><span class="flabel">Group(s) (one per line, or comma/semicolon separated)</span>
+            <div class="frow"><div class="tbx tall f-g"><span class="ty">it-alerts@contoso.com</span><span class="ty">project-atlas@contoso.com</span></div><span class="btn">Browse...</span></div></div>
+          <div><span class="flabel">Users</span>
+            <div class="frow"><div class="tbx tall f-u"><span class="ty">s.okafor@contoso.com</span></div><span class="btn">Browse...</span></div></div>
+        </div>
+        <div class="row" style="gap:28px"><span class="cb on c-m">${chk}Member</span><span class="cb">${chk}Owner</span></div>
+        <div class="row"><span class="btn b-add">Add Role</span><span class="btn">Remove Role</span></div>
+      </div>`,
+    cal: `
+      <div class="ppiv"><span>Permissions</span><span>Meeting Organizer</span></div>
+      <div class="stack" style="gap:16px">
+        <div class="cols" style="gap:16px">
+          <div class="fl"><label>Current organizer</label><div class="tbx f-c"><span class="ty">j.chen@contoso.com</span></div></div>
+          <div class="fl"><label>New organizer</label><div class="tbx f-n"><span class="ty">p.raman@contoso.com</span></div></div>
+        </div>
+        <div style="display:grid;grid-template-columns:200px 1fr;gap:16px">
+          <div class="fl"><label>Match by</label><div class="combo"><span>Event ID</span>${ico('chev')}</div></div>
+          <div class="fl"><label>Series Event ID</label><div class="tbx f-e"><span class="ty">AAMkAGI2NGVhZTVlLTI1OGMtNDI4My1iZmE5LTA5OGJiZGQzMGI0ZgBGAAAAAA</span></div></div>
+        </div>
+        <div class="row" style="gap:16px"><span class="cb">${chk}Future start date</span><span class="combo" style="width:180px;color:var(--w-dim)"><span>Select date</span>${ico('cal')}</span></div>
+        <div class="row"><span class="btn b-prev">Preview change</span><span class="bswap b-chg"><span class="btn dis a">Change organizer</span><span class="btn b">Change organizer</span></span></div>
+        <div class="ibs">
+          <div class="ib"><span class="ico">i</span><div><b>Not previewed</b></div></div>
+          <div class="ib i2"><span class="ico">i</span><div><b>Previewing change</b></div></div>
+          <div class="ib i3"><span class="ico">i</span><div><b>Preview completed</b><span>WhatIf passed for the default calendar series.</span></div></div>
+          <div class="ib i4"><span class="ico">i</span><div><b>Submitting organizer change</b></div></div>
+          <div class="ib warn i5"><span class="ico">!</span><div><b>Command completed</b><span>Command completed; calendar outcome unconfirmed. Check both calendars and Teams details before retrying.</span></div></div>
+        </div>
+      </div>`,
+    lookup: `
+      <div style="display:grid;grid-template-columns:290px 1fr;gap:24px;height:100%">
+        <div class="fl"><label>Recipient Identities</label>
+          <div class="tbx f-r" style="height:250px">${['helpdesk@contoso.com', 'boardroom-4@contoso.com', 'j.chen@contoso.com', 'it-alerts@contoso.com', 'project-atlas@contoso.com', 'projector-07@contoso.com'].map(x => `<span class="ty">${x}</span>`).join('')}</div>
+          <div class="row" style="margin-top:6px"><span class="btn b-chk">Check Recipients</span><span class="btn">Import File</span></div></div>
+        <div class="tbl lk">
+          <div class="tr th" style="grid-template-columns:1fr 190px"><span>Identity</span><span>Recipient Type</span></div>
+          ${[['helpdesk@contoso.com', 'Shared Mailbox'], ['boardroom-4@contoso.com', 'Room Mailbox'], ['j.chen@contoso.com', 'User Mailbox'], ['it-alerts@contoso.com', 'Distribution Group'], ['project-atlas@contoso.com', 'Microsoft 365 Group'], ['projector-07@contoso.com', 'Equipment Mailbox']]
+            .map(r => `<div class="tr lr" style="grid-template-columns:1fr 190px"><span>${r[0]}</span><span>${r[1]}</span></div>`).join('')}
+        </div>
+      </div>`,
+    report: `
+      <div class="stack" style="gap:16px">
+        <div style="display:grid;grid-template-columns:1fr auto;gap:12px;align-items:end">
+          <div class="fl"><label>Report type</label><div class="combo"><span>Mailbox permissions</span>${ico('chev')}</div></div><span></span>
+          <div class="fl"><label>Target</label><div class="tbx f-t"><span class="ty">helpdesk@contoso.com</span></div></div>
+          <span class="btn b-gen">Generate report</span>
+        </div>
+        <div class="ibs">
+          <div class="ib"><span class="ico">i</span><div><b>Ready</b></div></div>
+          <div class="ib i2"><span class="ico">i</span><div><b>Generating report</b><span>Mailbox permissions: helpdesk@contoso.com</span></div></div>
+          <div class="ib ok i3"><span class="ico">&#10003;</span><div><b>Report complete</b><span>helpdesk@contoso.com: 5 entries found.</span></div></div>
+          <div class="ib ok i4"><span class="ico">&#10003;</span><div><b>Report exported</b><span>Documents\\EXOKit_MailboxPermissions_20261005_145530.csv</span></div></div>
+        </div>
+        <div class="row" style="justify-content:space-between"><span style="font-weight:600">Results <span style="color:var(--w-muted);font-weight:400;margin-left:8px" class="swap rc"><span class="a">0 entries</span><span class="b">Helpdesk (helpdesk@contoso.com) &middot; 5 entries</span></span></span><span class="bswap b-exp"><span class="btn dis a">Export CSV</span><span class="btn b">Export CSV</span></span></div>
+        <div class="tbl">
+          <div class="tr th" style="grid-template-columns:120px 120px 1fr 140px 110px"><span>Object</span><span>Type</span><span>Member / Delegate</span><span>Role / Permission</span><span>Status</span></div>
+          ${[['Jordan Chen', 'Full Access'], ['Jordan Chen', 'Send As'], ['Priya Raman', 'Full Access'], ['Priya Raman', 'Send As'], ['Alex Rivera', 'Send on Behalf']]
+            .map(r => `<div class="tr rr" style="grid-template-columns:120px 120px 1fr 140px 110px"><span>Helpdesk</span><span>Shared Mailbox</span><span>${r[0]}</span><span>${r[1]}</span><span>Resolved</span></div>`).join('')}
+        </div>
+      </div>`,
+    snap: `
+      <div class="stack" style="gap:14px">
+        <div class="row"><span class="btn">Refresh</span><span class="bswap b-rest"><span class="btn dis a">Restore Selected</span><span class="btn b">Restore Selected</span></span><span class="btn">Delete Selected</span><span class="btn">Clear All</span><span class="btn">Open Snapshots Folder</span></div>
+        <div class="tbl">
+          <div class="tr th snaprow"><span>Taken</span><span>Operation</span><span>Target</span><span>Items</span></div>
+          <div class="tr snaprow s-new fresh" style="overflow:hidden"><span>2026-10-05 14:52:07</span><span>MailboxPermissionRemoval</span><span>helpdesk@contoso.com</span><span>1</span></div>
+          <div class="tr snaprow"><span>2026-10-05 11:20:44</span><span>GroupMembershipRemoval</span><span>it-alerts@contoso.com</span><span>3</span></div>
+          <div class="tr snaprow"><span>2026-10-04 16:03:12</span><span>GroupDelegateRemoval</span><span>finance-approvals@contoso.com</span><span>2</span></div>
+          <div class="tr snaprow"><span>2026-10-02 09:41:55</span><span>MailboxPermissionRemoval</span><span>payroll@contoso.com</span><span>2</span></div>
+        </div>
+      </div>`,
+    settings: `
+      <div class="stack" style="gap:14px">
+        <div class="setsec"><h4>Connections</h4>
+          <div class="kv"><span>EXOKit Application (Client) ID</span><div class="tbx">3f2b8c1e-5d47-4a90-b6e2-7c1d09a4e5f3</div></div>
+          <div class="kv"><span>Directory (Tenant) ID</span><div class="tbx">9a6d2f40-1b8e-4c3a-a7d5-e2f61c0b8d94</div></div>
+          <div class="kv"><span></span><span class="cb">${chk}Browser sign-in for Exchange (WAM compatibility)</span></div></div>
+        <div class="setsec"><h4>Bookings</h4>
+          <div class="kv"><span>License Group Name</span><div class="tbx">License_M365_Bookings</div></div>
+          <div class="kv"><span>Creators OWA Policy Name</span><div class="tbx">BookingsCreators</div></div></div>
+        <div class="setsec"><h4>ServiceNow Integration</h4>
+          <div class="kv"><span>Instance URL</span><div class="tbx">https://contoso.service-now.com/</div></div></div>
+        <div class="setsec s-up"><h4>Updates</h4>
+          <div class="kv"><span>Installed version</span><span>v1.0.39</span></div>
+          <div class="kv"><span>Update Feed URL (.appinstaller)</span><div class="tbx">https://ckh-rcit.github.io/EXOKit/EXOKit.appinstaller</div></div>
+          <div class="kv"><span></span><span class="row"><span class="btn b-upd">Check for Updates</span><span class="btn accent">Save Settings</span></span></div></div>
+      </div>`
+  };
+  const paneEls = {};
+  Object.keys(PANES).forEach(k => {
+    content.insertAdjacentHTML('beforeend', `<div class="pv sx">${PANES[k]}</div>`);
+    paneEls[k] = content.lastElementChild;
+  });
+
+  // ---------- logs ----------
+  const LOG_CONNECT = [
+    ['', 'Preparing the embedded PowerShell runtime and Exchange Online modules. Sign-in has not started...'],
+    ['l-ok', 'Successfully connected to Exchange Online as admin@contoso.com.'],
+    ['', 'Connecting to Microsoft Graph...'],
+    ['l-ok', 'Connected to Microsoft Graph as admin@contoso.com.']
+  ];
+  const MB_RUN = [
+    ['', '--- Starting Mailbox Permission Assignment ---'],
+    ['', 'Processing Mailbox: helpdesk@contoso.com'],
+    ['', 'Processing User: j.chen@contoso.com for Mailbox: helpdesk@contoso.com'],
+    ['', 'Attempting Add Full Access...'],
+    ['', 'Full Access add command submitted. Pending validation.'],
+    ['', 'Attempting Add Send As...'],
+    ['', 'Send As add command submitted. Pending validation.'],
+    ['', 'Processing User: p.raman@contoso.com for Mailbox: helpdesk@contoso.com'],
+    ['', 'Attempting Add Full Access...'],
+    ['', 'Full Access add command submitted. Pending validation.'],
+    ['', 'Attempting Add Send As...'],
+    ['', 'Send As add command submitted. Pending validation.'],
+    ['', "Validating applied permission changes for 'helpdesk@contoso.com' every 2 seconds for up to 30 seconds..."]
+  ];
+  const MB_OK = [
+    ['l-ok', "SUCCESS: Full Access added and verified for 'j.chen@contoso.com'."],
+    ['l-ok', "SUCCESS: Send As added and verified for 'j.chen@contoso.com'."],
+    ['l-ok', "SUCCESS: Full Access added and verified for 'p.raman@contoso.com'."],
+    ['l-ok', "SUCCESS: Send As added and verified for 'p.raman@contoso.com'."]
+  ];
+  const NOTES = [
+    'ACTION: Mailbox Permission Assignment | TARGET: helpdesk@contoso.com | USER: j.chen@contoso.com | STATUS: Full Access (Added), Send As (Added)',
+    'ACTION: Mailbox Permission Assignment | TARGET: helpdesk@contoso.com | USER: p.raman@contoso.com | STATUS: Full Access (Added), Send As (Added)'
+  ];
+  const TICKET_BLOCK = [
+    ['l-tk', '--- For IT Ticket ---'], ['l-tk', NOTES[0]], ['l-tk', NOTES[1]], ['l-tk', '---------------------'],
+    ['', "INFO: Ticket notes are ready. Use 'Copy Last Ticket Notes' to copy the most recent ticket section."],
+    ['l-sum', "Batch Summary for 'Mailbox Permission Assignment': Processed 2 users. Successful: 2, Completed with Info/No Change: 0, Failed: 0."]
+  ];
+  const SN = [
+    ['', "[ServiceNow] Attempting to update ticket 'TASK0048213'..."],
+    ['l-ok', "[ServiceNow] Ticket 'TASK0048213' closed."]
+  ];
+  const GROUPS = [
+    ['', '--- Starting Group Role Assignment ---'],
+    ['', 'Processing Group: it-alerts@contoso.com'],
+    ['', '  Processing User: s.okafor@contoso.com for Group: it-alerts@contoso.com (MailUniversalDistributionGroup)'],
+    ['', '    Attempting Add Member...'],
+    ['', '    INFO: Member add command submitted. Pending validation.'],
+    ['', 'Processing Group: project-atlas@contoso.com'],
+    ['', '  Processing User: s.okafor@contoso.com for Group: project-atlas@contoso.com (GroupMailbox)'],
+    ['', '    Attempting Add Member...'],
+    ['', '    INFO: Member add command submitted. Pending validation.'],
+    ['', "Validating group role changes for 'it-alerts@contoso.com' every 2 seconds for up to 30 seconds..."],
+    ['l-ok', "    SUCCESS: Member added and verified for 's.okafor@contoso.com'."],
+    ['', "Validating group role changes for 'project-atlas@contoso.com' every 2 seconds for up to 30 seconds..."],
+    ['l-ok', "    SUCCESS: Member added and verified for 's.okafor@contoso.com'."],
+    ['l-sum', "Batch Summary for 'Group Role Assignment': Processed 1 users. Successful: 1, Completed with Info/No Change: 0, Failed: 0."]
+  ];
+  const CAL = [
+    ['l-tk', '--- For IT Ticket ---'],
+    ['l-tk', 'ACTION: Change Meeting Organizer | ITEM: j.chen@contoso.com | STATUS: New organizer: p.raman@contoso.com, Meeting: AAMkAGI2NGVhZTVl..., Command completed; calendar outcome unconfirmed. Check both calendars and Teams details before retrying.'],
+    ['l-tk', '---------------------']
+  ];
+  const LOOKUP = [
+    ['helpdesk@contoso.com', 'Shared Mailbox'], ['boardroom-4@contoso.com', 'Room Mailbox'], ['j.chen@contoso.com', 'User Mailbox'],
+    ['it-alerts@contoso.com', 'Distribution Group'], ['project-atlas@contoso.com', 'Microsoft 365 Group'], ['projector-07@contoso.com', 'Equipment Mailbox']
+  ].flatMap(r => [['', `Checking recipient type for '${r[0]}'...`], ['l-ok', `Recipient Check: '${r[0]}' is '${r[1]}'.`]]);
+  const SNAP = [
+    ['', '--- Starting Mailbox Permission Removal ---'],
+    ['', 'Processing Mailbox: helpdesk@contoso.com'],
+    ['', 'Processing User: p.raman@contoso.com for Mailbox: helpdesk@contoso.com'],
+    ['', 'Attempting Remove Full Access...'],
+    ['', 'Snapshot saved: 2026-10-05_145207_MailboxPermissionRemoval_helpdesk@contoso.com_3f9a1c2e.json'],
+    ['', 'Full Access remove command submitted. Pending validation.'],
+    ['l-ok', "SUCCESS: Full Access removed and verified for 'p.raman@contoso.com'."],
+    ['l-ok', "Restored Full Access for 'p.raman@contoso.com' on 'helpdesk@contoso.com'."]
+  ];
+
+  let clock = 14 * 3600 + 30 * 60 + 58;
+  function stamp() {
+    clock += 1 + (clock % 3 === 0 ? 1 : 0);
+    const h = String(Math.floor(clock / 3600)).padStart(2, '0'), m = String(Math.floor(clock / 60) % 60).padStart(2, '0'), s = String(clock % 60).padStart(2, '0');
+    return `[2026-10-05 ${h}:${m}:${s}] `;
+  }
+  const logs = $('#logs'), logEls = {};
+  function makeLog(key, lines, count) {
+    logs.insertAdjacentHTML('beforeend', `<div class="log sx">${lines.map(l => `<p class="${l[0]}">${esc(stamp() + l[1])}</p>`).join('')}</div>`);
+    logEls[key] = { el: logs.lastElementChild, count };
+    return logEls[key].el;
+  }
+  makeLog('logEmpty', [], [0, 0]);
+  makeLog('logConnect', LOG_CONNECT, [4, 0]);
+  makeLog('logMb', [...LOG_CONNECT, ...MB_RUN, ...MB_OK], [21, 0]);
+  makeLog('logTicket', [...MB_RUN.slice(-1), ...MB_OK, ...TICKET_BLOCK, ...SN], [31, 2]);
+  logs.insertAdjacentHTML('beforeend', `<div class="log notes sx" id="notes">${NOTES.map(n => `<p>${esc(n)}</p>`).join('')}</div>`);
+  makeLog('logGroups', [...MB_OK.slice(-2), ...TICKET_BLOCK.slice(-1), ...GROUPS], [45, 2]);
+  makeLog('logCal', [...GROUPS.slice(-4), ...CAL], [52, 1]);
+  makeLog('logLookup', [...CAL, ...LOOKUP], [64, 1]);
+  makeLog('logSnap', [...LOOKUP.slice(-3), ...SNAP], [77, 1]);
+  makeLog('logOutro', SNAP.slice(-4), [77, 1]);
+  const ul = $('#ul'), tabLog = $('#tabLog');
+  ul.style.left = tabLog.offsetLeft + 'px'; ul.style.width = tabLog.offsetWidth + 'px';
+
+  // ---------- overlays ----------
+  const ovl = $('#ovl');
+  function overlay(html) { ovl.insertAdjacentHTML('beforeend', `<div class="sx" style="position:absolute;inset:0">${html}<div class="ptr">${ptrSvg}</div></div>`); return ovl.lastElementChild; }
+  const dlg = (title, body, mono) => `<div class="smoke"><div class="dlg"><div class="bd"><h5>${title}</h5><div>${body}</div>${mono ? `<div class="mono">${esc(mono)}</div>` : ''}</div><div class="ft"><span class="btn d-yes">Yes</span><span class="btn accent">Cancel</span></div></div></div>`;
+  const ovs = SCENES.map(() => null);
+  ovs[2] = overlay(`
+    <div class="fly f1"><div class="mi m-exo">${ico('mail')}Connect Exchange Online</div><div class="mi dis">${ico('people')}Connect Microsoft Graph</div><div class="msep"></div><div class="mi dis">${ico('cancel')}Disconnect All</div></div>
+    <div class="fly f2"><div class="mi dis">${ico('mail')}Connect Exchange Online</div><div class="mi m-gr">${ico('people')}Connect Microsoft Graph</div><div class="msep"></div><div class="mi">${ico('cancel')}Disconnect All</div></div>`);
+  ovs[3] = overlay('');
+  ovs[4] = overlay(`<div class="tip t-copy">Ticket notes copied</div>` + dlg('Confirm Ticket Closure', "Close ticket 'TASK0048213' with these verified operation notes?", NOTES.join('\n')));
+  ovs[5] = overlay('');
+  ovs[6] = overlay(dlg('Change Meeting Organizer', 'Current: j.chen@contoso.com<br>New: p.raman@contoso.com<br>Series Event ID: AAMkAGI2NGVhZTVl...', 'Only the default calendar is supported. The previous organizer is not retained as an attendee.'));
+  ovs[7] = overlay('');
+  ovs[8] = overlay('');
+  ovs[9] = overlay(dlg('Restore Snapshot', "Restore 1 item to 'helpdesk@contoso.com'? Missing rights are added back and verified. Unrelated delegates are not replaced."));
+  ovs[10] = overlay(dlg('Check for Updates', 'Open the update feed at ckh-rcit.github.io? Windows App Installer will validate the package signature.'));
+
+  // ---------- chapters + progress UI ----------
+  const total = SCENES.reduce((a, s) => a + s.dur, 0);
+  const bar = $('#bar'), chapters = $('#chapters');
+  SCENES.forEach((s, i) => {
+    bar.insertAdjacentHTML('beforeend', `<button type="button" style="flex-grow:${s.dur}" aria-label="Chapter ${i + 1}: ${s.title}"><span><i></i></span></button>`);
+    chapters.insertAdjacentHTML('beforeend', `<li><button type="button"><span class="n">${String(i + 1).padStart(2, '0')}</span><b>${s.title}</b><small>${s.blurb}</small></button></li>`);
+  });
+  const segFills = $$('#bar i'), segBtns = $$('#bar button'), chapBtns = $$('#chapters button');
+
+  // ---------- scaling ----------
+  let scale = 1;
+  function fit() {
+    const w = viewport.clientWidth, h = viewport.clientHeight;
+    scale = Math.min(w / 1920, h / 1080) || 1;
+    const ox = (w - 1920 * scale) / 2, oy = (h - 1080 * scale) / 2;
+    stage.style.transform = `translate(${ox}px, ${oy}px) scale(${scale})`;
+  }
+  fit();
+  if (window.ResizeObserver) new ResizeObserver(fit).observe(viewport); else window.addEventListener('resize', fit);
+
+  // ---------- geometry in window space (transform-free) ----------
+  function at(el, fx = 0.5, fy = 0.5) {
+    let x = 0, y = 0, n = el;
+    while (n && n !== win) { x += n.offsetLeft; y += n.offsetTop; n = n.offsetParent; }
+    return { x: x + el.offsetWidth * fx, y: y + el.offsetHeight * fy };
+  }
+
+  // ---------- scene state ----------
+  const caps = $$('.cap');
+  const ws = $('#ws'), sel = $('#sel'), ttl = $('#ttl'), tk = $('#tk');
+  function setVisible(i) {
+    caps.forEach(c => c.classList.toggle('on', c.dataset.s === String(i)));
+    Object.keys(paneEls).forEach(k => paneEls[k].classList.toggle('on', SCENES[i].pane === k));
+    Object.keys(logEls).forEach(k => logEls[k].el.classList.toggle('on', SCENES[i].log === k));
+    $('#notes').classList.toggle('on', i === 4);
+    ovs.forEach((o, j) => o && o.classList.toggle('on', j === i));
+    ws.classList.toggle('nolog', !SCENES[i].log);
+  }
+  function setPersistent(i, animate) {
+    const s = SCENES[i];
+    ttl.textContent = s.page;
+    tk.textContent = s.ticket || '';
+    const lc = s.log ? logEls[s.log].count : [0, 0];
+    $('#nLog').textContent = lc[0]; $('#nNotes').textContent = lc[1];
+    $('#count').textContent = `${String(i + 1).padStart(2, '0')} / ${SCENES.length}`;
+    const exoOn = s.conn >= 1 ? 1 : 0, grOn = s.conn >= 2 ? 1 : 0;
+    const set = (sel, v) => $$(sel).forEach(e => { e.style.opacity = v; });
+    set('#dExo .on', exoOn); set('#tExo .b', exoOn); set('#tExo .a', 1 - exoOn);
+    set('#dGraph .on', grOn); set('#tGraph .b', grOn); set('#tGraph .a', 1 - grOn);
+    const y = s.nav >= 0 ? navItems[s.nav].offsetTop : 0, op = s.nav >= 0 ? 1 : 0;
+    if (G && animate) G.to(sel, { y, opacity: op, duration: .45, ease: 'power3.out' });
+    else if (G) G.set(sel, { y, opacity: op });
+    else { sel.style.transform = `translateY(${y}px)`; sel.style.opacity = op; }
+    $('#brandbar').style.visibility = (i === 0 || i === SCENES.length - 1) ? 'hidden' : 'visible';
+    $('#ring').style.opacity = 0;
+    if (G) G.set(cam, { scale: 1, x: 0, y: 0 }); else cam.style.transform = '';
+  }
+
+  // ---------- timelines ----------
+  const timelines = [];
+  function stub() { const p = new Proxy(function () {}, { get: (t, k) => k === 'progress' ? (() => 1) : k === 'duration' ? (() => 0) : (() => p) }); return p; }
+
+  function helpers(tl, o) {
+    const ptr = o ? $('.ptr', o) : null, clk = ptr ? $('.clk', ptr) : null;
+    let first = true;
+    return {
+      type(el, t, d) { const n = Math.max(4, el.textContent.length); tl.fromTo(el, { clipPath: 'inset(0 100% 0 0)' }, { clipPath: 'inset(0 0% 0 0)', duration: d || n * 0.045, ease: `steps(${n})`, immediateRender: true }, t); },
+      line(el, t) { tl.from(el, { height: 0, opacity: 0, duration: .22, ease: 'power1.out' }, t); },
+      move(el, t, d = .6, fx = .5, fy = .5) {
+        const p = at(el, fx, fy);
+        if (first) { first = false; tl.fromTo(ptr, { x: p.x + 60, y: p.y + 70, opacity: 0 }, { x: p.x, y: p.y, opacity: 1, duration: d, ease: 'power2.out' }, t); }
+        else tl.to(ptr, { x: p.x, y: p.y, duration: d, ease: 'power2.inOut' }, t);
+      },
+      click(t, target) {
+        tl.fromTo(clk, { scale: .3, opacity: .95 }, { scale: 1.5, opacity: 0, duration: .45, ease: 'power1.out', immediateRender: false }, t);
+        if (target) tl.fromTo(target, { filter: 'brightness(1)' }, { filter: 'brightness(1.6)', duration: .1, yoyo: true, repeat: 1, immediateRender: false }, t);
+      },
+      hidePtr(t) { tl.to(ptr, { opacity: 0, duration: .3 }, t); },
+      check(cb, t) { tl.from($('i b', cb), { scale: .3, opacity: 0, duration: .2, ease: 'back.out(2)' }, t); },
+      ring(t0, t1) { tl.fromTo('#ring', { opacity: 0 }, { opacity: 1, duration: .2, immediateRender: false }, t0); tl.to('#ring', { opacity: 0, duration: .3 }, t1); },
+      swap(a, b, t, d = .3) { tl.fromTo(a, { opacity: 1 }, { opacity: 0, duration: d, immediateRender: false }, t); tl.fromTo(b, { opacity: 0 }, { opacity: 1, duration: d, immediateRender: false }, t); },
+      dialog(o, tIn, tOut) {
+        const sm = $('.smoke', o), d = $('.dlg', o);
+        tl.fromTo(sm, { opacity: 0 }, { opacity: 1, duration: .25, immediateRender: false }, tIn);
+        tl.fromTo(d, { scale: .94 }, { scale: 1, duration: .3, ease: 'power2.out', immediateRender: false }, tIn);
+        tl.to(sm, { opacity: 0, duration: .2 }, tOut);
+      },
+      focus(tbx, t) { tl.fromTo(tbx, { borderBottomWidth: 1 }, { borderBottomWidth: 2, borderBottomColor: '#EDEDED', duration: .1, immediateRender: false }, t); },
+      unfocus(tbx, t) { tl.to(tbx, { borderBottomWidth: 1, borderBottomColor: '#8A8A8A', duration: .1 }, t); }
+    };
+  }
+  const newLines = (key, n) => $$('p', logEls[key].el).slice(-n);
+
+  const BUILD = [
+    // 0 intro
+    (tl) => {
+      const c = caps[0];
+      tl.from($$('.c-chips li', c), { opacity: 0, y: 12, duration: .4, stagger: .12, ease: 'power2.out' }, .3);
+      tl.from($('.c-hint', c), { opacity: 0, duration: .5 }, 1.2);
+      tl.fromTo(navItems, { opacity: 1 }, { opacity: .4, duration: .25, stagger: .06, yoyo: true, repeat: 1, ease: 'none', immediateRender: false }, 1.6);
+    },
+    // 1 tour
+    (tl) => {
+      const rows = $$('.tour li', paneEls.tour), spot = $('#spot');
+      tl.from(rows, { opacity: .18, duration: .01 }, 0);
+      navItems.forEach((n, k) => {
+        const t = .7 + k * .62;
+        if (k === 0) tl.fromTo(spot, { y: n.offsetTop, opacity: 0 }, { opacity: 1, duration: .3 }, t - .3);
+        else tl.to(spot, { y: n.offsetTop, duration: .32, ease: 'power2.inOut' }, t);
+        tl.fromTo(rows[k], { opacity: .18, backgroundColor: 'rgba(242,180,44,0)' }, { opacity: 1, backgroundColor: 'rgba(242,180,44,.14)', duration: .25, immediateRender: false }, t + .1);
+        tl.to(rows[k], { backgroundColor: 'rgba(242,180,44,0)', duration: .5 }, t + .62);
+      });
+      tl.to(spot, { opacity: 0, duration: .4 }, .7 + 13 * .62);
+      tl.from($$('.facts li', caps[1]), { opacity: 0, y: 12, stagger: .3, duration: .4 }, 1.4);
+    },
+    // 2 connect
+    (tl, o) => {
+      const h = helpers(tl, o), f1 = $('.f1', o), f2 = $('.f2', o), globe = $('#globe');
+      const g = at(globe, 0, 1); [f1, f2].forEach(f => { f.style.left = g.x + 'px'; f.style.top = (g.y + 6) + 'px'; });
+      const lines = newLines('logConnect', 4), c = caps[2];
+      tl.fromTo($$('#dExo .on, #dGraph .on, #tExo .b, #tGraph .b'), { opacity: 0 }, { opacity: 0, duration: .01 }, 0);
+      tl.fromTo($$('#tExo .a, #tGraph .a'), { opacity: 1 }, { opacity: 1, duration: .01 }, 0);
+      tl.from($$('.steps li', c), { opacity: .25, duration: .01 }, 0);
+      h.move(globe, .5, .7); h.click(1.2, globe);
+      tl.fromTo(f1, { opacity: 0, y: -6 }, { opacity: 1, y: 0, duration: .2, immediateRender: false }, 1.3);
+      h.move($('.m-exo', f1), 1.6, .5, .3); tl.fromTo($('.m-exo', f1), { backgroundColor: 'rgba(255,255,255,0)' }, { backgroundColor: 'rgba(255,255,255,.08)', duration: .1, immediateRender: false }, 2.0);
+      h.click(2.3); tl.to(f1, { opacity: 0, duration: .15 }, 2.45);
+      h.line(lines[0], 2.6); h.ring(2.6, 4.6);
+      h.line(lines[1], 4.4); h.swap('#tExo .a', '#tExo .b', 4.4); tl.fromTo('#dExo .on', { opacity: 0 }, { opacity: 1, duration: .3, immediateRender: false }, 4.4);
+      tl.fromTo($('.cn-1', c), { opacity: .25 }, { opacity: 1, duration: .4, immediateRender: false }, 4.4);
+      h.move(globe, 5.0, .5); h.click(5.6, globe);
+      tl.fromTo(f2, { opacity: 0, y: -6 }, { opacity: 1, y: 0, duration: .2, immediateRender: false }, 5.7);
+      h.move($('.m-gr', f2), 6.0, .5, .3); tl.fromTo($('.m-gr', f2), { backgroundColor: 'rgba(255,255,255,0)' }, { backgroundColor: 'rgba(255,255,255,.08)', duration: .1, immediateRender: false }, 6.4);
+      h.click(6.7); tl.to(f2, { opacity: 0, duration: .15 }, 6.85);
+      h.line(lines[2], 7.0); h.ring(7.0, 8.3);
+      h.line(lines[3], 8.2); h.swap('#tGraph .a', '#tGraph .b', 8.2); tl.fromTo('#dGraph .on', { opacity: 0 }, { opacity: 1, duration: .3, immediateRender: false }, 8.2);
+      tl.fromTo($('.cn-2', c), { opacity: .25 }, { opacity: 1, duration: .4, immediateRender: false }, 8.2);
+      h.hidePtr(8.8);
+    },
+    // 3 mailbox
+    (tl, o) => {
+      const p = paneEls.mb, h = helpers(tl, o), c = caps[3];
+      const ft = $('.f-t', p), fu = $('.f-u', p), [t1] = $$('.ty', ft), [u1, u2] = $$('.ty', fu);
+      const run = newLines('logMb', 17), ticks = $$('.ticks i', c);
+      h.type(t1, 1.2, .8); h.type(u1, 2.7, .7); h.type(u2, 3.45, .7);
+      [$('.c-fa', p), $('.c-sa', p)].forEach(cb => tl.from($('i b', cb), { scale: .3, opacity: 0, duration: .01 }, 0));
+      const fills = ticks.slice(0, 4).map(t => $('b', t));
+      tl.from(fills, { opacity: 0, scaleY: .2, duration: .01 }, 0);
+      h.move(ft, .4, .6, .3, .2); h.click(1.0); h.focus(ft, 1.0); h.unfocus(ft, 2.1);
+      h.move(fu, 2.0, .5, .3, .2); h.click(2.5); h.focus(fu, 2.5); h.unfocus(fu, 4.3);
+      h.move($('.c-fa i', p), 4.3, .4); h.click(4.7); tl.to($('.c-fa i b', p), { scale: 1, opacity: 1, duration: .2, ease: 'back.out(2)' }, 4.7);
+      h.move($('.c-sa i', p), 4.95, .35); h.click(5.3); tl.to($('.c-sa i b', p), { scale: 1, opacity: 1, duration: .2, ease: 'back.out(2)' }, 5.3);
+      h.move($('.b-add', p), 5.55, .45); h.click(6.1, $('.b-add', p)); h.ring(6.2, 11.2);
+      run.slice(0, 13).forEach((l, k) => h.line(l, 6.3 + k * .2));
+      [9.0, 9.4, 9.8, 10.2].forEach((t, k) => tl.to(fills[k], { opacity: 1, scaleY: 1, duration: .2, ease: 'power2.out' }, t));
+      h.swap($('.poll .a', c), $('.poll .b', c), 10.25);
+      run.slice(13).forEach((l, k) => h.line(l, 10.3 + k * .2));
+      h.hidePtr(11.4);
+      tl.from($$('.facts li', c), { opacity: 0, y: 12, duration: .4 }, 11.3);
+    },
+    // 4 ticket notes
+    (tl, o) => {
+      const h = helpers(tl, o), out = $('#out'), c = caps[4];
+      const tl0 = at(out, 0, 0), br = at(out, 1, 1), W = 1096, H = 896;
+      const rw = br.x - tl0.x + 20, rh = br.y - tl0.y + 20, s = Math.min(W / rw, H / rh, 1.7);
+      const zx = -(tl0.x - 10) * s + (W - rw * s) / 2, zy = -(tl0.y - 10) * s + (H - rh * s) / 2;
+      tl.fromTo(cam, { scale: 1, x: 0, y: 0 }, { scale: s, x: zx, y: zy, duration: 1, ease: 'power2.inOut' }, .2);
+      const L = $$('p', logEls.logTicket.el), block = L.slice(5, 11), sn = L.slice(11);
+      block.forEach((l, k) => h.line(l, 1.3 + k * .22));
+      const snH = sn.map(l => l.offsetHeight);
+      sn.forEach(l => tl.from(l, { height: 0, opacity: 0, duration: .01 }, 0));
+      const notes = $('#notes'), logEl = logEls.logTicket.el, tabN = $('#tabNotes'), tabL = $('#tabLog');
+      const ulAt = el => ({ left: el.offsetLeft, width: el.offsetWidth });
+      tl.fromTo(ul, ulAt(tabL), Object.assign({ duration: .3, ease: 'power2.inOut', immediateRender: false }, ulAt(tabN)), 3.1);
+      h.move(tabN, 2.6, .5, .3); h.click(3.0);
+      tl.fromTo(notes, { opacity: 0 }, { opacity: 1, duration: .25, immediateRender: false }, 3.15);
+      tl.fromTo(logEl, { opacity: 1 }, { opacity: 0, duration: .25, immediateRender: false }, 3.15);
+      const cp = $('#cp'), tip = $('.t-copy', o), cpp = at(cp, .5, 0);
+      tip.style.left = (cpp.x - 60) + 'px'; tip.style.top = (cpp.y - 40) + 'px';
+      h.move(cp, 3.7, .5); h.click(4.3, cp);
+      tl.fromTo(tip, { opacity: 0, y: 4 }, { opacity: 1, y: 0, duration: .2, immediateRender: false }, 4.4);
+      tl.to(tip, { opacity: 0, duration: .3 }, 5.5);
+      tl.to(cam, { scale: 1, x: 0, y: 0, duration: .9, ease: 'power2.inOut' }, 5.7);
+      h.dialog(o, 6.5, 8.2);
+      h.move($('.d-yes', o), 7.0, .7); h.click(7.9, $('.d-yes', o));
+      tl.to(ul, Object.assign({ duration: .3, ease: 'power2.inOut' }, ulAt(tabL)), 8.5);
+      tl.to(notes, { opacity: 0, duration: .25 }, 8.5); tl.to(logEl, { opacity: 1, duration: .25 }, 8.5);
+      sn.forEach((l, k) => tl.to(l, { height: snH[k], opacity: 1, duration: .22 }, 8.8 + k * .5));
+      h.hidePtr(9.6);
+      tl.from($$('.facts li', c), { opacity: 0, y: 12, stagger: .3, duration: .4 }, 1.0);
+    },
+    // 5 groups
+    (tl, o) => {
+      const p = paneEls.groups, h = helpers(tl, o), c = caps[5];
+      const fg = $('.f-g', p), fu = $('.f-u', p), [g1, g2] = $$('.ty', fg), [u1] = $$('.ty', fu), lines = newLines('logGroups', 14);
+      h.move(fg, .4, .6, .3, .2); h.click(1.0); h.focus(fg, 1.0); h.type(g1, 1.1, .7); h.type(g2, 1.9, .8); h.unfocus(fg, 2.9);
+      h.move(fu, 2.8, .5, .3, .2); h.click(3.3); h.focus(fu, 3.3); h.type(u1, 3.4, .7); h.unfocus(fu, 4.3);
+      tl.from($('.c-m i b', p), { scale: .3, opacity: 0, duration: .01 }, 0);
+      h.move($('.c-m i', p), 4.2, .4); h.click(4.65); tl.to($('.c-m i b', p), { scale: 1, opacity: 1, duration: .2, ease: 'back.out(2)' }, 4.65);
+      h.move($('.b-add', p), 4.9, .45); h.click(5.4, $('.b-add', p)); h.ring(5.5, 10.3);
+      lines.slice(0, 9).forEach((l, k) => h.line(l, 5.6 + k * .28));
+      lines.slice(9).forEach((l, k) => h.line(l, 8.4 + k * .4));
+      const wire = (w, t) => tl.from(w, { scaleX: 0, duration: .5, ease: 'power2.out' }, t);
+      tl.from([$('.r1', c), $('.r2', c)], { opacity: 0, x: -12, duration: .01 }, 0);
+      tl.from([$('.r1d', c), $('.r2d', c)], { opacity: 0, x: -12, duration: .01 }, 0);
+      tl.to($('.r1', c), { opacity: 1, x: 0, duration: .4 }, 6.0); wire($('.r1w', c), 6.3); tl.to($('.r1d', c), { opacity: 1, x: 0, duration: .4 }, 6.7);
+      tl.to($('.r2', c), { opacity: 1, x: 0, duration: .4 }, 7.1); wire($('.r2w', c), 7.4); tl.to($('.r2d', c), { opacity: 1, x: 0, duration: .4 }, 7.8);
+      h.hidePtr(6.0);
+      tl.from($$('.facts li', c), { opacity: 0, y: 12, duration: .4 }, 10.4);
+    },
+    // 6 calendar
+    (tl, o) => {
+      const p = paneEls.cal, h = helpers(tl, o), c = caps[6], ibs = $$('.ib', p);
+      const fc = $('.f-c', p), fn = $('.f-n', p), fe = $('.f-e', p);
+      h.move(fc, .4, .5, .3); h.click(.9); h.focus(fc, .9); h.type($('.ty', fc), 1.0, .7); h.unfocus(fc, 1.8);
+      h.move(fn, 1.7, .4, .3); h.click(2.1); h.focus(fn, 2.1); h.type($('.ty', fn), 2.2, .7); h.unfocus(fn, 3.0);
+      h.move(fe, 2.9, .4, .3); h.click(3.3); h.focus(fe, 3.3); h.type($('.ty', fe), 3.4, .6); h.unfocus(fe, 4.1);
+      h.move($('.b-prev', p), 4.0, .4); h.click(4.5, $('.b-prev', p)); h.ring(4.6, 5.9);
+      h.swap(ibs[0], ibs[1], 4.6, .2); h.swap(ibs[1], ibs[2], 5.9, .25);
+      h.swap($('.b-chg .a', p), $('.b-chg .b', p), 6.0);
+      tl.from($('.g1 .hl', c), { opacity: 0, duration: .01 }, 0);
+      tl.to($('.g1 .hl', c), { opacity: 1, duration: .3 }, 5.9);
+      tl.to($('.shackle', c), { y: -6, duration: .35, ease: 'back.out(3)' }, 6.1);
+      tl.from($('.g2', c), { opacity: .35, duration: .01 }, 0);
+      tl.to($('.g2', c), { opacity: 1, duration: .3 }, 6.2);
+      h.move($('.b-chg', p), 6.4, .5); h.click(7.0, $('.b-chg .b', p));
+      h.dialog(o, 7.2, 9.0);
+      h.move($('.d-yes', o), 7.8, .6); h.click(8.7, $('.d-yes', o));
+      h.ring(9.1, 10.3); h.swap(ibs[2], ibs[3], 9.1, .2); h.swap(ibs[3], ibs[4], 10.3, .25);
+      newLines('logCal', 3).forEach((l, k) => h.line(l, 10.4 + k * .25));
+      h.hidePtr(10.0);
+      tl.from($$('.facts li', c), { opacity: 0, y: 12, stagger: .3, duration: .4 }, 10.6);
+    },
+    // 7 lookup
+    (tl, o) => {
+      const p = paneEls.lookup, h = helpers(tl, o), c = caps[7], fr = $('.f-r', p), rows = $$('.lr', p), lines = newLines('logLookup', 12);
+      h.move(fr, .4, .5, .4, .3); h.click(.9); h.focus(fr, .9);
+      tl.from($$('.ty', fr), { opacity: 0, duration: .01 }, 0);
+      tl.to($$('.ty', fr), { opacity: 1, duration: .15 }, 1.2);
+      tl.fromTo(fr, { backgroundColor: '#1C1C1C' }, { backgroundColor: '#2A2A2A', duration: .15, yoyo: true, repeat: 1, immediateRender: false }, 1.2);
+      h.unfocus(fr, 1.8);
+      h.move($('.b-chk', p), 1.6, .5); h.click(2.2, $('.b-chk', p)); h.ring(2.3, 5.8);
+      rows.forEach((r, k) => {
+        const t = 2.5 + k * .55;
+        h.line(lines[k * 2], t - .1); h.line(lines[k * 2 + 1], t + .2);
+        tl.from(r, { opacity: 0, y: 8, duration: .3 }, t);
+        tl.from(r.lastElementChild, { opacity: 0, duration: .25 }, t + .25);
+      });
+      h.hidePtr(3.2);
+      tl.from($$('.inputs li', c), { opacity: 0, y: 12, stagger: .35, duration: .4 }, 6.0);
+    },
+    // 8 report
+    (tl, o) => {
+      const p = paneEls.report, h = helpers(tl, o), c = caps[8], ft = $('.f-t', p), ibs = $$('.ib', p), rows = $$('.rr', p);
+      h.move(ft, .4, .5, .3); h.click(.9); h.focus(ft, .9); h.type($('.ty', ft), 1.0, .8); h.unfocus(ft, 2.0);
+      h.move($('.b-gen', p), 1.9, .4); h.click(2.4, $('.b-gen', p)); h.ring(2.5, 4.7);
+      h.swap(ibs[0], ibs[1], 2.5, .2);
+      tl.from(rows, { opacity: 0, y: 8, duration: .3, stagger: .3 }, 3.0);
+      h.swap(ibs[1], ibs[2], 4.7, .25); h.swap($('.rc .a', p), $('.rc .b', p), 4.7);
+      h.swap($('.b-exp .a', p), $('.b-exp .b', p), 4.7);
+      h.move($('.b-exp', p), 5.3, .5); h.click(6.0, $('.b-exp .b', p));
+      h.swap(ibs[2], ibs[3], 6.3, .25);
+      h.hidePtr(7.0);
+      tl.from($$('.facts li', c), { opacity: 0, y: 12, stagger: .3, duration: .4 }, 6.6);
+    },
+    // 9 snapshots
+    (tl, o) => {
+      const p = paneEls.snap, h = helpers(tl, o), c = caps[9], row = $('.s-new', p), lines = newLines('logSnap', 8), st = $$('.steps li', c);
+      h.move(row, 4.4, .6, .3); h.click(5.1, row);
+      lines.slice(0, 7).forEach((l, k) => h.line(l, .5 + k * .45));
+      h.ring(.5, 3.8);
+      tl.from(row, { height: 0, paddingTop: 0, paddingBottom: 0, opacity: 0, duration: .4, ease: 'power2.out' }, 2.3);
+      tl.from(st, { opacity: .25, duration: .01 }, 0);
+      tl.to(st[0], { opacity: 1, duration: .35 }, 2.3); tl.to(st[1], { opacity: 1, duration: .35 }, 3.3);
+      tl.fromTo(row, { backgroundColor: 'rgba(255,255,255,0)' }, { backgroundColor: 'rgba(255,255,255,.08)', duration: .15, immediateRender: false }, 5.15);
+      h.swap($('.b-rest .a', p), $('.b-rest .b', p), 5.15, .15);
+      h.move($('.b-rest', p), 5.5, .5); h.click(6.1, $('.b-rest .b', p));
+      h.dialog(o, 6.3, 8.0);
+      h.move($('.d-yes', o), 6.8, .6); h.click(7.7, $('.d-yes', o));
+      h.ring(8.1, 9.2); h.line(lines[7], 9.1); tl.to(st[2], { opacity: 1, duration: .35 }, 9.1);
+      h.hidePtr(9.6);
+      tl.from($$('.facts li', c), { opacity: 0, y: 12, duration: .4 }, 9.8);
+    },
+    // 10 ship
+    (tl, o) => {
+      const p = paneEls.settings, h = helpers(tl, o), c = caps[10], up = $('.s-up', p), st = $$('.steps li', c);
+      tl.from(st, { opacity: 0, x: -14, duration: .45, stagger: .7, ease: 'power2.out' }, .4);
+      tl.fromTo(up, { borderColor: '#1F1F1F' }, { borderColor: 'rgba(242,180,44,.6)', duration: .4, immediateRender: false }, 1.0);
+      h.move($('.b-upd', p), 1.4, .7); h.click(2.4, $('.b-upd', p));
+      h.dialog(o, 2.6, 4.6);
+      h.move($('.d-yes', o), 3.4, .6); h.click(4.3, $('.d-yes', o));
+      h.hidePtr(5.0);
+      tl.from($$('.facts li', c), { opacity: 0, y: 12, duration: .4 }, 4.6);
+    },
+    // 11 outro
+    (tl) => {
+      const c = caps[11];
+      tl.from([$('.o-icon', c), $('.o-title', c)], { opacity: 0, y: 20, duration: .6, stagger: .15, ease: 'power3.out' }, .2);
+      tl.from([$('.o-lede', c), $('.o-get', c), $('.o-hint', c)], { opacity: 0, y: 14, duration: .5, stagger: .25, ease: 'power2.out' }, .8);
+      tl.fromTo(navItems, { opacity: 1 }, { opacity: .5, duration: .25, stagger: .05, yoyo: true, repeat: 1, ease: 'none', immediateRender: false }, 2.2);
+    }
+  ];
+
+  function buildAll() {
+    SCENES.forEach((s, i) => {
+      setVisible(i); setPersistent(i, false);
+      if (!G) { timelines[i] = stub(); return; }
+      const tl = G.timeline({ paused: true, onComplete: () => onSceneEnd(i) });
+      BUILD[i](tl, ovs[i]);
+      tl.to({}, { duration: 0 }, s.dur);
+      timelines[i] = tl;
+    });
+  }
+
+  // ---------- player ----------
+  let cur = 0, playing = !reduced && !!G, hold = null;
+  const bPlay = $('#bPlay');
+  function setPlayUI() {
+    $('.ico-pause', bPlay).style.display = playing ? '' : 'none';
+    $('.ico-play', bPlay).style.display = playing ? 'none' : '';
+    bPlay.setAttribute('aria-label', playing ? 'Pause' : 'Play');
+  }
+  function enter(i, opts = {}) {
+    i = (i + SCENES.length) % SCENES.length;
+    if (hold) { hold.kill(); hold = null; }
+    timelines.forEach((t, j) => { if (j !== i) t.pause(0); });
+    cur = i;
+    setVisible(i);
+    setPersistent(i, !opts.instant);
+    if (G && !opts.instant && !reduced) {
+      G.fromTo(caps[i], { opacity: 0, y: 18 }, { opacity: 1, y: 0, duration: .5, ease: 'power2.out' });
+      G.fromTo(paneEls[SCENES[i].pane], { opacity: 0 }, { opacity: 1, duration: .3 });
+    }
+    const tl = timelines[i];
+    if (reduced || !G) {
+      tl.progress(1, true);
+      if (playing && G) hold = G.delayedCall(SCENES[i].dur, () => onSceneEnd(i));
+    } else if (playing) tl.restart();
+    else tl.progress(1, true).pause();
+    chapBtns.forEach((b, j) => { if (j === i) b.setAttribute('aria-current', 'step'); else b.removeAttribute('aria-current'); });
+  }
+  function onSceneEnd(i) {
+    if (i !== cur || !playing) return;
+    if (i === SCENES.length - 1) { playing = false; setPlayUI(); return; }
+    enter(i + 1);
+  }
+  function togglePlay() {
+    if (!G) return;
+    playing = !playing;
+    const tl = timelines[cur];
+    if (playing) {
+      if (reduced) hold = G.delayedCall(SCENES[cur].dur, () => onSceneEnd(cur));
+      else if (tl.progress() >= 1) {
+        if (cur === SCENES.length - 1) enter(0); else enter(cur + 1);
+      } else tl.play();
+    } else {
+      tl.pause();
+      if (hold) { hold.kill(); hold = null; }
+    }
+    setPlayUI();
+  }
+  function fmt(t) { t = Math.max(0, Math.round(t)); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; }
+  function tick() {
+    const p = reduced ? (hold ? hold.progress() : 1) : timelines[cur].progress();
+    segFills.forEach((f, j) => { f.style.transform = `scaleX(${j < cur ? 1 : j > cur ? 0 : p})`; });
+    const before = SCENES.slice(0, cur).reduce((a, s) => a + s.dur, 0);
+    $('#time').textContent = `${fmt(before + p * SCENES[cur].dur)} / ${fmt(total)}`;
+    requestAnimationFrame(tick);
+  }
+
+  $('#bPrev').addEventListener('click', () => enter(cur - 1));
+  $('#bNext').addEventListener('click', () => enter(cur + 1));
+  bPlay.addEventListener('click', togglePlay);
+  segBtns.forEach((b, j) => b.addEventListener('click', () => enter(j)));
+  chapBtns.forEach((b, j) => b.addEventListener('click', () => { enter(j); viewport.scrollIntoView({ block: 'nearest', behavior: reduced ? 'auto' : 'smooth' }); }));
+  function fullscreen() {
+    if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); return; }
+    if (viewport.requestFullscreen) viewport.requestFullscreen().catch(() => {});
+  }
+  $('#bFull').addEventListener('click', fullscreen);
+  viewport.addEventListener('dblclick', fullscreen);
+  document.addEventListener('keydown', e => {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    const onButton = e.target.closest && e.target.closest('button');
+    if ((e.key === ' ' || e.key === 'k') && !(onButton && e.key === ' ')) { e.preventDefault(); togglePlay(); }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); enter(cur + 1); }
+    else if (e.key === 'ArrowLeft') { e.preventDefault(); enter(cur - 1); }
+    else if (e.key === 'f' || e.key === 'F') fullscreen();
+  });
+  document.addEventListener('visibilitychange', () => { if (document.hidden && playing) togglePlay(); });
+
+  buildAll();
+  setPlayUI();
+  enter(0, { instant: true });
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>
