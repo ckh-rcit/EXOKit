@@ -1651,6 +1651,7 @@ namespace EXOKit
             try
             {
                 Directory.CreateDirectory(_snapshotService.SnapshotsDirectory);
+                var snapshotsLocation = PackagedPathResolver.ToBrowsablePath(_snapshotService.SnapshotsDirectory);
 
                 // Passing the directory path directly as ProcessStartInfo.FileName with
                 // UseShellExecute=true relies on the shell resolving a folder as its own "verb", which
@@ -1661,7 +1662,7 @@ namespace EXOKit
                 var startInfo = new System.Diagnostics.ProcessStartInfo
                 {
                     FileName = "explorer.exe",
-                    Arguments = $"\"{_snapshotService.SnapshotsDirectory}\"",
+                    Arguments = $"\"{snapshotsLocation}\"",
                     UseShellExecute = true
                 };
                 System.Diagnostics.Process.Start(startInfo);

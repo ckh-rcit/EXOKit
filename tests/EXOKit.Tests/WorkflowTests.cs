@@ -367,7 +367,7 @@ public sealed class WorkflowTests
         using var powershell = PowerShell.Create();
         powershell.Runspace = runspace;
         powershell.AddScript("""
-            param($bootstrap, $brokenFirst)
+            param($bootstrap, $brokenFirst, $documents)
             $savedModulePath = $env:PSModulePath
             try {
                 $global:Pwsh = Microsoft.PowerShell.Core\Get-Command pwsh.exe -CommandType Application -ErrorAction Stop
@@ -384,17 +384,26 @@ public sealed class WorkflowTests
                 }
                 function Split-Path { param($Path) $global:AliasDirectory }
                 function Import-Module { param($Name)
-                    if ($Name -like '*\Microsoft.PowerShell.PSResourceGet.psd1') { throw 'TEST: manager resolved' }
+                    if ($Name -like '*\Microsoft.PowerShell.PSResourceGet.psd1') { $global:LoadedManager = $Name; return }
                     throw "Unexpected import: $Name"
                 }
-                try { & ([scriptblock]::Create($bootstrap)) }
+                function Get-PSResourceRepository { throw 'TEST: manager resolved' }
+                try { & ([scriptblock]::Create($bootstrap)) -DocumentsPath $documents }
                 catch { $_.Exception.Message }
+                $global:LoadedManager
             } finally { $env:PSModulePath = $savedModulePath }
             """);
-        powershell.AddParameter("bootstrap", PowerShellPrerequisites.Script).AddParameter("brokenFirst", brokenFirst);
-        var results = powershell.Invoke();
-        Assert.Empty(powershell.Streams.Error);
-        Assert.Equal("TEST: manager resolved", Assert.Single(results).ToString());
+        var documents = Path.Combine(Path.GetTempPath(), "EXOKit-docs-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            powershell.AddParameter("bootstrap", PowerShellPrerequisites.Script).AddParameter("brokenFirst", brokenFirst).AddParameter("documents", documents);
+            var results = powershell.Invoke();
+            Assert.Empty(powershell.Streams.Error);
+            Assert.Equal(2, results.Count);
+            Assert.Equal("TEST: manager resolved", results[0].ToString());
+            Assert.EndsWith("Microsoft.PowerShell.PSResourceGet.psd1", results[1].ToString());
+        }
+        finally { if (Directory.Exists(documents)) Directory.Delete(documents, true); }
     }
 
     [Fact]
@@ -405,24 +414,182 @@ public sealed class WorkflowTests
         using var powershell = PowerShell.Create();
         powershell.Runspace = runspace;
         powershell.AddScript("""
-            param($bootstrap)
+            param($bootstrap, $documents, $localData)
             $savedModulePath = $env:PSModulePath
             try {
                 function Get-Module { param($Name, [switch]$ListAvailable) }
                 function Get-Command { param($Name, $CommandType, [switch]$All, $ErrorAction) }
                 function Test-Path { param($LiteralPath, $PathType) $false }
-                try { & ([scriptblock]::Create($bootstrap)) }
+                function Invoke-WebRequest { throw 'offline' }
+                try { & ([scriptblock]::Create($bootstrap)) -DocumentsPath $documents -LocalDataPath $localData }
                 catch { $_.Exception.Message }
             } finally { $env:PSModulePath = $savedModulePath }
             """);
-        powershell.AddParameter("bootstrap", PowerShellPrerequisites.Script);
-        var results = powershell.Invoke();
+        var documents = Path.Combine(Path.GetTempPath(), "EXOKit-docs-" + Guid.NewGuid().ToString("N"));
+        powershell.AddParameter("bootstrap", PowerShellPrerequisites.Script).AddParameter("documents", documents).AddParameter("localData", documents + "-local");
+        List<PSObject> results;
+        try { results = powershell.Invoke().ToList(); }
+        finally
+        {
+            if (Directory.Exists(documents)) Directory.Delete(documents, true);
+            if (Directory.Exists(documents + "-local")) Directory.Delete(documents + "-local", true);
+        }
         Assert.Empty(powershell.Streams.Error);
         var message = Assert.Single(results).ToString();
-        Assert.Contains("EXOKit is running embedded PowerShell 7.6", message);
-        Assert.Contains("cannot locate Microsoft.PowerShell.PSResourceGet 1.2.0 or later", message);
+        Assert.Contains("cannot load Microsoft.PowerShell.PSResourceGet 1.2.0 or later (embedded PowerShell 7.6", message);
+        Assert.Contains("Private PSResourceGet download: offline", message);
         Assert.Contains("-Scope CurrentUser", message);
         Assert.DoesNotContain("Install PowerShell 7.6", message);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PrerequisitesSkipUnloadablePowerShellCopyThenVerifyPrivateDownload(bool tamperedDownload)
+    {
+        using var runspace = RunspaceFactory.CreateRunspace(new LoggerPSHost(), LoggerPSHost.CreateInitialSessionState());
+        runspace.Open();
+        using var powershell = PowerShell.Create();
+        powershell.Runspace = runspace;
+        powershell.AddScript("""
+            param($bootstrap, $documents, $localData)
+            $savedModulePath = $env:PSModulePath
+            try {
+                $storeCopy = 'C:\Program Files\WindowsApps\Microsoft.PowerShell_7.6.6.0_x64__8wekyb3d8bbwe\Modules\Microsoft.PowerShell.PSResourceGet\Microsoft.PowerShell.PSResourceGet.psd1'
+                function Get-Module { param($Name, [switch]$ListAvailable) [pscustomobject]@{ Version = [version]'1.2.0'; Path = $storeCopy } }
+                function Get-Command { param($Name, $CommandType, [switch]$All, $ErrorAction) }
+                function Test-Path { param($LiteralPath, $PathType) $false }
+                function Import-Module { param($Name) throw 'Could not load file or assembly. Access is denied.' }
+                function Invoke-WebRequest { param($Uri, $OutFile) [IO.File]::WriteAllText($OutFile, 'not the published package') }
+                try { & ([scriptblock]::Create($bootstrap)) -DocumentsPath $documents -LocalDataPath $localData }
+                catch { $_.Exception.Message }
+            } finally { $env:PSModulePath = $savedModulePath }
+            """);
+        var root = Path.Combine(Path.GetTempPath(), "EXOKit-store-" + Guid.NewGuid().ToString("N"));
+        powershell.AddParameter("bootstrap", PowerShellPrerequisites.Script).AddParameter("documents", Path.Combine(root, "Documents")).AddParameter("localData", Path.Combine(root, "Local"));
+        try
+        {
+            var message = Assert.Single(powershell.Invoke()).ToString();
+            Assert.Empty(powershell.Streams.Error);
+            Assert.Contains("WindowsApps", message);
+            Assert.Contains("Access is denied", message);
+            Assert.Contains("failed integrity verification", message);
+            Assert.False(Directory.Exists(Path.Combine(root, "Local", "EXOKit", "PSResourceGet", "1.2.0")));
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void PrerequisitesInstallVerifiedPrivatePsResourceGetWhenNoPowerShellInstallExists()
+    {
+        using var runspace = RunspaceFactory.CreateRunspace(new LoggerPSHost(), LoggerPSHost.CreateInitialSessionState());
+        runspace.Open();
+        using var powershell = PowerShell.Create();
+        powershell.Runspace = runspace;
+        powershell.AddScript("""
+            param($bootstrap, $documents, $localData, $empty)
+            $savedModulePath = $env:PSModulePath; $savedProgramFiles = $env:ProgramFiles; $savedProgramW6432 = $env:ProgramW6432
+            try {
+                $env:ProgramFiles = $empty; $env:ProgramW6432 = $empty
+                function Get-Command { param($Name, $CommandType, [switch]$All, $ErrorAction) }
+                function Get-Module { param($Name, [switch]$ListAvailable)
+                    if ($Name -like '*.psd1') { Microsoft.PowerShell.Core\Get-Module -ListAvailable $Name }
+                }
+                function Get-PSResourceRepository { throw 'TEST: manager loaded' }
+                try { & ([scriptblock]::Create($bootstrap)) -DocumentsPath $documents -LocalDataPath $localData }
+                catch { $_.Exception.Message }
+                (Microsoft.PowerShell.Core\Get-Module Microsoft.PowerShell.PSResourceGet).Path
+            } finally { $env:PSModulePath = $savedModulePath; $env:ProgramFiles = $savedProgramFiles; $env:ProgramW6432 = $savedProgramW6432 }
+            """);
+        var root = Path.Combine(Path.GetTempPath(), "EXOKit-private-" + Guid.NewGuid().ToString("N"));
+        powershell.AddParameter("bootstrap", PowerShellPrerequisites.Script).AddParameter("documents", Path.Combine(root, "Documents"))
+            .AddParameter("localData", Path.Combine(root, "Local")).AddParameter("empty", Path.Combine(root, "NoPowerShell"));
+        try
+        {
+            var results = powershell.Invoke();
+            Assert.Empty(powershell.Streams.Error);
+            Assert.Equal("TEST: manager loaded", results[0].ToString());
+            var expected = Path.Combine(root, "Local", "EXOKit", "PSResourceGet", "1.2.0");
+            Assert.Equal(expected, Path.GetDirectoryName(results[1].ToString()), ignoreCase: true);
+            var folders = Directory.GetDirectories(Path.Combine(root, "Local", "EXOKit", "PSResourceGet")).Select(Path.GetFileName);
+            Assert.Equal(new[] { "1.2.0" }, folders);
+        }
+        finally
+        {
+            runspace.Close();
+            if (Directory.Exists(root)) try { Directory.Delete(root, true); } catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { }
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PrerequisitesFallBackWhenDocumentsModulesFolderIsBlocked(bool fallbackAlsoBlocked)
+    {
+        using var runspace = RunspaceFactory.CreateRunspace(new LoggerPSHost(), LoggerPSHost.CreateInitialSessionState());
+        runspace.Open();
+        using var powershell = PowerShell.Create();
+        powershell.Runspace = runspace;
+        powershell.AddScript("""
+            param($bootstrap, $documents, $localData)
+            $savedModulePath = $env:PSModulePath
+            try {
+                function Get-Module { param($Name, [switch]$ListAvailable) }
+                function Get-Command { param($Name, $CommandType, [switch]$All, $ErrorAction) }
+                function Test-Path { param($LiteralPath, $PathType) $false }
+                function Invoke-WebRequest { throw 'offline' }
+                $message = try { & ([scriptblock]::Create($bootstrap)) -DocumentsPath $documents -LocalDataPath $localData } catch { $_.Exception.Message }
+                [pscustomobject]@{ Message = $message; ModulePath = $env:PSModulePath }
+            } finally { $env:PSModulePath = $savedModulePath }
+            """);
+        var root = Path.Combine(Path.GetTempPath(), "EXOKit-blocked-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var blockingFile = Path.Combine(root, "blocked");
+        File.WriteAllText(blockingFile, "a file where a directory is required");
+        var documents = Path.Combine(blockingFile, "Documents");
+        var localData = fallbackAlsoBlocked ? Path.Combine(blockingFile, "Local") : Path.Combine(root, "Local");
+        powershell.AddParameter("bootstrap", PowerShellPrerequisites.Script).AddParameter("documents", documents).AddParameter("localData", localData);
+        try
+        {
+            var result = Assert.Single(powershell.Invoke());
+            Assert.Empty(powershell.Streams.Error);
+            var message = result.Properties["Message"].Value?.ToString() ?? string.Empty;
+            if (fallbackAlsoBlocked)
+            {
+                Assert.Contains("cannot write PowerShell modules", message);
+                Assert.Contains("Controlled Folder Access", message);
+                Assert.DoesNotContain(Path.Combine(localData, "EXOKit", "Modules") + ";", result.Properties["ModulePath"].Value?.ToString());
+            }
+            else
+            {
+                var fallback = Path.Combine(localData, "EXOKit", "Modules");
+                Assert.True(Directory.Exists(fallback));
+                Assert.Empty(Directory.GetFileSystemEntries(fallback));
+                Assert.Contains(fallback, result.Properties["ModulePath"].Value?.ToString());
+                Assert.Contains(powershell.Streams.Warning, warning => warning.Message.Contains(fallback));
+                Assert.Contains("cannot load Microsoft.PowerShell.PSResourceGet", message);
+            }
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void ShellBrushesAreDefinedForEveryApplicationTheme()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory != null && !File.Exists(Path.Combine(directory.FullName, "App.xaml"))) directory = directory.Parent;
+        Assert.NotNull(directory);
+        var document = System.Xml.Linq.XDocument.Load(Path.Combine(directory!.FullName, "App.xaml"));
+        System.Xml.Linq.XNamespace x = "http://schemas.microsoft.com/winfx/2006/xaml";
+        var themes = document.Descendants().Where(element => element.Name.LocalName == "ResourceDictionary.ThemeDictionaries")
+            .SelectMany(element => element.Elements()).ToDictionary(element => (string)element.Attribute(x + "Key")!,
+                element => element.Elements().Select(brush => (string?)brush.Attribute(x + "Key")).OfType<string>().ToHashSet());
+        // Windows resolves a missing Light theme through Default; the dark shell must never fail on a light-mode PC.
+        Assert.True(themes.ContainsKey("Default") || themes.ContainsKey("Light"), "No theme dictionary serves light-mode Windows.");
+        var shellBrushes = themes.Values.SelectMany(keys => keys).Where(key => key.StartsWith("Shell", StringComparison.Ordinal)).ToHashSet();
+        Assert.NotEmpty(shellBrushes);
+        foreach (var theme in new[] { "Default", "Dark", "HighContrast" })
+            Assert.True(themes.TryGetValue(theme, out var keys) && shellBrushes.IsSubsetOf(keys), $"{theme} theme is missing shell brushes.");
     }
 
     [Fact]

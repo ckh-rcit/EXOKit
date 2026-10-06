@@ -13,7 +13,7 @@ internal static class ErrorReporter
         try { Logger.Log($"{operation}: {error}", LogType.Error); } catch { }
         try
         {
-            MessageBoxW(IntPtr.Zero, $"{operation}\n\n{error.Message}\n\n{(fatal ? "The application must close. " : "")}Review applied changes before retrying.\nLog: {Logger.LogPath}", "EXOKit", 0x10);
+            MessageBoxW(IntPtr.Zero, $"{operation}\n\n{error.Message}\n\n{(fatal ? "The application must close. Send this log to the maintainer." : "Review applied changes before retrying.")}\n{(Logger.IsLogFileWritable ? "Log: " + Logger.LogPath : "The log file could not be saved. Copy this message.")}", "EXOKit", 0x10);
         }
         catch { }
     }

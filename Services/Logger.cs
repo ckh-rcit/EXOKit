@@ -35,30 +35,41 @@ namespace EXOKit.Services
         private static readonly List<string> _rawLines = new();
         private static readonly List<(string Line, LogType Type)> _history = new();
         private static readonly object _lock = new();
-        public static string LogPath => System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "EXOKit", "Logs", $"{DateTime.Now:yyyy-MM-dd}.log");
+        private static readonly LogFileWriter _file = new(
+            () => System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "EXOKit", "Logs", $"{DateTime.Now:yyyy-MM-dd}.log"),
+            () => System.IO.Path.Combine(System.IO.Path.GetTempPath(), "EXOKit", "Logs", $"{DateTime.Now:yyyy-MM-dd}.log"));
+
+        /// <summary>The log file's real location, resolved through MSIX AppData redirection so it can be browsed to.</summary>
+        public static string LogPath => PackagedPathResolver.ToBrowsablePath(_file.CurrentPath);
+
+        public static bool IsLogFileWritable => _file.Writable;
 
         public static void Log(string message, LogType type = LogType.Info)
         {
             var timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
             var line = $"[{timestamp}] {message}";
+            var emitted = new List<(string Line, LogType Type)>();
 
             lock (_lock)
             {
-                _rawLines.Add(line);
-                _history.Add((line, type));
-                try
+                var notice = _file.Append(line);
+                if (notice != null) emitted.Add(($"[{timestamp}] {notice}", LogType.Warning));
+                emitted.Add((line, type));
+                foreach (var entry in emitted)
                 {
-                    System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(LogPath)!);
-                    System.IO.File.AppendAllText(LogPath, line + Environment.NewLine);
+                    _rawLines.Add(entry.Line);
+                    _history.Add(entry);
                 }
-                catch { }
             }
 
             var handlers = LogEntryWritten;
             if (handlers == null) return;
-            foreach (Action<string, LogType> handler in handlers.GetInvocationList())
+            foreach (var (emittedLine, emittedType) in emitted)
             {
-                try { handler(line, type); } catch { }
+                foreach (Action<string, LogType> handler in handlers.GetInvocationList())
+                {
+                    try { handler(emittedLine, emittedType); } catch { }
+                }
             }
         }
 

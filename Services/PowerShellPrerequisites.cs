@@ -3,20 +3,50 @@ namespace EXOKit.Services;
 internal static class PowerShellPrerequisites
 {
     internal const string Script = """
-        param([string]$ModuleRoot)
+        param([string]$ModuleRoot, [string]$DocumentsPath, [string]$LocalDataPath)
         $ErrorActionPreference = 'Stop'
         Write-Host "EXOKit embedded PowerShell: $($PSVersionTable.PSVersion); PSHOME: $PSHOME"
         if ($PSVersionTable.PSVersion -lt [version]'7.6.0') { throw "Update EXOKit: EXO 3.10.1 requires embedded PowerShell 7.6 or later; this application is using $($PSVersionTable.PSVersion). Updating standalone PowerShell does not update the application's embedded engine." }
-        $documents = [Environment]::GetFolderPath([Environment+SpecialFolder]::MyDocuments)
-        if ([string]::IsNullOrWhiteSpace($documents)) { throw 'The CurrentUser Documents directory is unavailable. Cannot prepare PowerShell modules.' }
-        $userModules = Join-Path $documents 'PowerShell\Modules'
+        $documents = if ($DocumentsPath) { $DocumentsPath } else { [Environment]::GetFolderPath([Environment+SpecialFolder]::MyDocuments) }
+        $userModules = if ($documents) { Join-Path $documents 'PowerShell\Modules' }
         if ($ModuleRoot) { $userModules = $ModuleRoot }
+        $writeProbe = {
+            param($directory)
+            [IO.Directory]::CreateDirectory($directory) | Out-Null
+            $probe = Join-Path $directory ('.exokit-write-test-' + [guid]::NewGuid().ToString('N'))
+            [IO.File]::WriteAllText($probe, 'test')
+            Remove-Item -LiteralPath $probe -Force
+        }
+        $writeError = if (-not $userModules) { 'The Documents folder is unavailable.' } else { try { & $writeProbe $userModules } catch { $_.Exception.Message } }
+        if ($writeError) {
+            $local = if ($LocalDataPath) { $LocalDataPath } else { [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData) }
+            $fallback = if ($local) { Join-Path $local 'EXOKit\Modules' }
+            $fallbackError = if (-not $fallback) { 'The LocalAppData folder is unavailable.' } else { try { & $writeProbe $fallback } catch { $_.Exception.Message } }
+            if ($fallbackError) { throw "EXOKit cannot write PowerShell modules to '$userModules' ($writeError) or '$fallback' ($fallbackError). Security software such as Windows Security Controlled Folder Access or a device policy may be blocking it. Allow EXOKit to write to one of these folders and restart the app." }
+            Write-Warning "Cannot write modules to '$userModules' ($writeError). Using '$fallback' instead."
+            $userModules = $fallback
+        }
         if (($env:PSModulePath -split [IO.Path]::PathSeparator) -notcontains $userModules) {
             $env:PSModulePath = $userModules + [IO.Path]::PathSeparator + $env:PSModulePath
         }
-        $manager = Get-Module -ListAvailable Microsoft.PowerShell.PSResourceGet |
-            Where-Object Version -GE ([version]'1.2.0') | Sort-Object Version -Descending | Select-Object -First 1
-        if (-not $manager) {
+        $managerErrors = [Collections.Generic.List[string]]::new()
+        $managerLoaded = $false
+        $loadManager = {
+            param($candidate)
+            if (-not $candidate -or $candidate.Version -lt [version]'1.2.0') { return $false }
+            try {
+                Import-Module $candidate.Path
+                Write-Host "PSResourceGet $($candidate.Version): $($candidate.Path)"
+                return $true
+            } catch {
+                $managerErrors.Add("$($candidate.Path): $($_.Exception.Message)")
+                return $false
+            }
+        }
+        foreach ($candidate in @(Get-Module -ListAvailable Microsoft.PowerShell.PSResourceGet | Sort-Object Version -Descending)) {
+            if (& $loadManager $candidate) { $managerLoaded = $true; break }
+        }
+        if (-not $managerLoaded) {
             $pwshPaths = @(
                 (Get-Command pwsh.exe -CommandType Application -All -ErrorAction SilentlyContinue).Source
                 foreach ($programFiles in @($env:ProgramW6432, $env:ProgramFiles)) {
@@ -31,10 +61,11 @@ internal static class PowerShellPrerequisites
                 $process = $null
                 try {
                     $manifest = Join-Path (Split-Path $pwshPath) 'Modules\Microsoft.PowerShell.PSResourceGet\Microsoft.PowerShell.PSResourceGet.psd1'
+                    $candidate = $null
                     if (Test-Path -LiteralPath $manifest -PathType Leaf) {
-                        $manager = Get-Module -ListAvailable $manifest | Where-Object Version -GE ([version]'1.2.0') | Select-Object -First 1
+                        $candidate = Get-Module -ListAvailable $manifest | Select-Object -First 1
                     }
-                    if (-not $manager) {
+                    if (-not $candidate) {
                         $process = [Diagnostics.Process]::new()
                         $process.StartInfo.FileName = $pwshPath
                         $process.StartInfo.UseShellExecute = $false
@@ -58,21 +89,47 @@ internal static class PowerShellPrerequisites
                         }
                         $manifest = Join-Path $powerShellHome 'Modules\Microsoft.PowerShell.PSResourceGet\Microsoft.PowerShell.PSResourceGet.psd1'
                         if (Test-Path -LiteralPath $manifest -PathType Leaf) {
-                            $manager = Get-Module -ListAvailable $manifest | Where-Object Version -GE ([version]'1.2.0') | Select-Object -First 1
+                            $candidate = Get-Module -ListAvailable $manifest | Select-Object -First 1
                         }
                     }
-                    if ($manager) { break }
-                    $discoveryErrors.Add("$pwshPath : PSResourceGet 1.2.0 or later was not found.")
+                    if (& $loadManager $candidate) { $managerLoaded = $true; break }
+                    if (-not $candidate) { $discoveryErrors.Add("$pwshPath : PSResourceGet was not found.") }
                 } catch {
                     $discoveryErrors.Add("$pwshPath : $($_.Exception.Message)")
                 } finally {
                     if ($process) { $process.Dispose() }
                 }
             }
-            if (-not $manager) { throw "EXOKit is running embedded PowerShell $($PSVersionTable.PSVersion), but cannot locate Microsoft.PowerShell.PSResourceGet 1.2.0 or later. In standalone PowerShell 7, run 'Install-Module Microsoft.PowerShell.PSResourceGet -MinimumVersion 1.2.0 -Scope CurrentUser -Repository PSGallery', then restart EXOKit. Discovery details: $($discoveryErrors -join ' ')" }
         }
-        Write-Host "PSResourceGet $($manager.Version): $($manager.Path)"
-        Import-Module $manager.Path
+        if (-not $managerLoaded) {
+            # Microsoft Store PowerShell keeps its modules in a package folder that other apps cannot load from.
+            $privateBase = if ($LocalDataPath) { $LocalDataPath } else { [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData) }
+            $privateRoot = Join-Path $privateBase 'EXOKit\PSResourceGet'
+            $privateManifest = Join-Path $privateRoot '1.2.0\Microsoft.PowerShell.PSResourceGet.psd1'
+            try {
+                if (-not (Test-Path -LiteralPath $privateManifest -PathType Leaf)) {
+                    Write-Host 'Downloading PSResourceGet 1.2.0 from the PowerShell Gallery...'
+                    Add-Type -AssemblyName System.IO.Compression.FileSystem
+                    $temp = Join-Path ([IO.Path]::GetTempPath()) ('exokit-psrg-' + [guid]::NewGuid().ToString('N'))
+                    [IO.Directory]::CreateDirectory($temp) | Out-Null
+                    try {
+                        $package = Join-Path $temp 'psresourceget.nupkg'
+                        Invoke-WebRequest -Uri 'https://www.powershellgallery.com/api/v2/package/Microsoft.PowerShell.PSResourceGet/1.2.0' -OutFile $package -MaximumRedirection 5 -UseBasicParsing
+                        $hash = (Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash
+                        if ($hash -ne '90E4C97B2F5ECF8C7D4730CA3B7028739E2B7665DED27249390483F73BE71944') { throw "Downloaded PSResourceGet failed integrity verification (SHA256 $hash)." }
+                        $stage = Join-Path $privateRoot ('1.2.0.' + [guid]::NewGuid().ToString('N'))
+                        [IO.Directory]::CreateDirectory($privateRoot) | Out-Null
+                        [IO.Compression.ZipFile]::ExtractToDirectory($package, $stage)
+                        try { [IO.Directory]::Move($stage, (Join-Path $privateRoot '1.2.0')) }
+                        catch { if (-not (Test-Path -LiteralPath $privateManifest -PathType Leaf)) { throw } }
+                        finally { if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force } }
+                    } finally { Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue }
+                }
+                $candidate = Get-Module -ListAvailable $privateManifest | Select-Object -First 1
+                if (& $loadManager $candidate) { $managerLoaded = $true }
+            } catch { $managerErrors.Add("Private PSResourceGet download: $($_.Exception.Message)") }
+        }
+        if (-not $managerLoaded) { throw "EXOKit cannot load Microsoft.PowerShell.PSResourceGet 1.2.0 or later (embedded PowerShell $($PSVersionTable.PSVersion)). Check internet access to www.powershellgallery.com, or in standalone PowerShell 7 run 'Install-Module Microsoft.PowerShell.PSResourceGet -MinimumVersion 1.2.0 -Scope CurrentUser -Repository PSGallery', then restart EXOKit. Details: $((@($managerErrors) + @($discoveryErrors)) -join ' | ')" }
         $repository = Get-PSResourceRepository PSGallery -ErrorAction SilentlyContinue
         if (-not $repository) { Register-PSResourceRepository -PSGallery; $repository = Get-PSResourceRepository PSGallery }
         if ($repository.Uri.ToString().TrimEnd('/') -ne 'https://www.powershellgallery.com/api/v2') { throw 'PSGallery must point to https://www.powershellgallery.com/api/v2.' }
@@ -94,7 +151,13 @@ internal static class PowerShellPrerequisites
             if (-not $installed -or $installed.Version -ne $version) {
                 Write-Host "Installing $name $version for CurrentUser..."
                 [IO.Directory]::CreateDirectory($userModules) | Out-Null
-                Save-PSResource $name -Version $version.ToString() -Repository PSGallery -Path $userModules -IncludeXml -TrustRepository -Quiet
+                try { Save-PSResource $name -Version $version.ToString() -Repository PSGallery -Path $userModules -IncludeXml -TrustRepository -Quiet }
+                catch {
+                    if ($_.Exception -is [UnauthorizedAccessException] -or $_.Exception.Message -match 'denied|not have permission|unauthorized') {
+                        throw "Access was denied while saving $name $version to '$userModules'. Security software such as Windows Security Controlled Folder Access may be blocking EXOKit. Allow EXOKit to write there, or install the module from standalone PowerShell 7 with: Install-PSResource $name -Scope CurrentUser. Details: $($_.Exception.Message)"
+                    }
+                    throw
+                }
                 $modulePath = Join-Path $userModules "$name\$version\$name.psd1"
             } else {
                 $modulePath = $installed.Path
