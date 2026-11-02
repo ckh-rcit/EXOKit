@@ -54,6 +54,7 @@ namespace EXOKit.Services
                 await _exo.CreateSharedMailboxAsync(request.DisplayName, request.Email);
                 result.Actions.Add("Mailbox Created");
                 Logger.Log($"  SUCCESS: Mailbox '{request.Email}' created.");
+                await WaitForMailboxVisibleAsync(request.Email);
             }
             catch (Exception ex)
             {
@@ -164,36 +165,64 @@ namespace EXOKit.Services
             return result;
         }
 
+        private const int ReplicationAttempts = 8;
+        private static readonly TimeSpan ReplicationDelay = TimeSpan.FromSeconds(5);
+
+        // New-Mailbox can return before the mailbox is visible to every Exchange backend, so a follow-up cmdlet may report it missing.
+        private static bool IsMailboxNotYetVisible(Exception ex) =>
+            ex.Message.Contains("ManagementObjectNotFoundException", StringComparison.OrdinalIgnoreCase)
+            || ex.Message.Contains("as a recipient", StringComparison.OrdinalIgnoreCase)
+            || ex.Message.Contains("couldn't be found", StringComparison.OrdinalIgnoreCase);
+
+        private async Task WaitForMailboxVisibleAsync(string email)
+        {
+            for (var attempt = 1; attempt <= ReplicationAttempts; attempt++)
+            {
+                try
+                {
+                    if (await _exo.MailboxExistsAsync(email)) return;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    Logger.Log($"  Mailbox visibility check failed: {ex.Message}", LogType.Warning);
+                }
+                Logger.Log($"  Waiting for '{email}' to replicate ({attempt}/{ReplicationAttempts})...", LogType.Warning);
+                await Task.Delay(ReplicationDelay);
+            }
+            Logger.Log($"  Mailbox '{email}' is not yet visible; permission steps will retry.", LogType.Warning);
+        }
+
         private static async Task Wait(string label, string[] users, Func<string, Task> action, SharedMailboxCreationResult result)
         {
             foreach (var user in users)
             {
-                try
+                var objectRefRetried = false;
+                for (var attempt = 1; ; attempt++)
                 {
-                    await action(user);
-                    result.Actions.Add($"{label} granted to {user}");
-                    Logger.Log($"  {label} granted to '{user}'.");
-                }
-                catch (Exception ex) when (ex.Message.Contains("Object reference not set to an instance of an object", StringComparison.OrdinalIgnoreCase))
-                {
-                    Logger.Log($"  {label} for '{user}' returned server error (Object reference not set). Retrying once...", LogType.Warning);
-                    await Task.Delay(2000);
                     try
                     {
                         await action(user);
                         result.Actions.Add($"{label} granted to {user}");
                         Logger.Log($"  {label} granted to '{user}'.");
+                        break;
                     }
-                    catch (Exception retryEx)
+                    catch (Exception ex) when (!objectRefRetried && ex.Message.Contains("Object reference not set to an instance of an object", StringComparison.OrdinalIgnoreCase))
                     {
-                        Logger.Log($"  ERROR: Failed to grant {label} to '{user}'. DETAILS: {retryEx.Message}", LogType.Error);
-                        result.Actions.Add($"ERROR Granting {label} to {user}");
+                        objectRefRetried = true;
+                        Logger.Log($"  {label} for '{user}' returned server error (Object reference not set). Retrying once...", LogType.Warning);
+                        await Task.Delay(2000);
                     }
-                }
-                catch (Exception ex)
-                {
-                    Logger.Log($"  ERROR: Failed to grant {label} to '{user}'. DETAILS: {ex.Message}", LogType.Error);
-                    result.Actions.Add($"ERROR Granting {label} to {user}");
+                    catch (Exception ex) when (attempt < ReplicationAttempts && IsMailboxNotYetVisible(ex))
+                    {
+                        Logger.Log($"  {label} for '{user}': mailbox not yet replicated. Retrying ({attempt}/{ReplicationAttempts})...", LogType.Warning);
+                        await Task.Delay(ReplicationDelay);
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Log($"  ERROR: Failed to grant {label} to '{user}'. DETAILS: {ex.Message}", LogType.Error);
+                        result.Actions.Add($"ERROR Granting {label} to {user}");
+                        break;
+                    }
                 }
             }
         }
