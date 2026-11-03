@@ -8,7 +8,8 @@ namespace EXOKit.Services
     public enum ReportKind
     {
         GroupMembership,
-        MailboxPermissions
+        MailboxPermissions,
+        AccountActivity
     }
 
     public sealed record ReportDefinition(ReportKind Kind, string Name, ReportTargetKind TargetKind, string TargetLabel, string Placeholder);
@@ -38,7 +39,8 @@ namespace EXOKit.Services
     {
         Unsupported,
         Group,
-        Mailbox
+        Mailbox,
+        Any
     }
 
     /// <summary>
@@ -67,7 +69,8 @@ namespace EXOKit.Services
         public static IReadOnlyList<ReportDefinition> ReportTypes { get; } = Array.AsReadOnly(new[]
         {
             new ReportDefinition(ReportKind.GroupMembership, "Group membership and owners", ReportTargetKind.Group, "Group", "Group email, alias, or object ID"),
-            new ReportDefinition(ReportKind.MailboxPermissions, "Mailbox permissions", ReportTargetKind.Mailbox, "Mailbox", "Mailbox email, alias, or object ID")
+            new ReportDefinition(ReportKind.MailboxPermissions, "Mailbox permissions", ReportTargetKind.Mailbox, "Mailbox", "Mailbox email, alias, or object ID"),
+            new ReportDefinition(ReportKind.AccountActivity, "Account activity (is it in use?)", ReportTargetKind.Any, "Group or mailbox", "Shared mailbox, group, or distribution list email")
         });
 
         public ReportingService(ExoPowerShellService exo)
@@ -82,12 +85,16 @@ namespace EXOKit.Services
                 ?? throw new ArgumentOutOfRangeException(nameof(kind));
             _exo.OperationCancellationToken.ThrowIfCancellationRequested();
             var target = await ClassifyReportTargetAsync(identity.Trim());
-            if (target.Kind != definition.TargetKind)
+            var targetMatches = definition.TargetKind == ReportTargetKind.Any
+                ? target.Kind != ReportTargetKind.Unsupported
+                : target.Kind == definition.TargetKind;
+            if (!targetMatches)
                 throw new InvalidOperationException($"{definition.Name} requires a {definition.TargetLabel.ToLowerInvariant()}. '{target.Name}' is a {target.FriendlyType}.");
             var rows = kind switch
             {
                 ReportKind.GroupMembership => await GenerateObjectReportAsync(target.Identity),
                 ReportKind.MailboxPermissions => await GetMailboxDelegatesAsync(target.Identity),
+                ReportKind.AccountActivity => await GenerateAccountActivityAsync(target),
                 _ => throw new ArgumentOutOfRangeException(nameof(kind))
             };
             _exo.OperationCancellationToken.ThrowIfCancellationRequested();
@@ -249,6 +256,82 @@ namespace EXOKit.Services
                 FriendlyType = friendlyType,
                 Kind = kind
             };
+        }
+
+        public const int ActivityLookbackDays = 180;
+
+        /// <summary>
+        /// Read-only "is this account still used" check: newest Inbox/Sent Items dates and logon times for
+        /// mailboxes, plus a 90-day message trace for every target type. Failed checks are shown, never assumed empty.
+        /// </summary>
+        public async Task<List<ReportRow>> GenerateAccountActivityAsync(ReportTargetInfo target, DateTime? utcNow = null)
+        {
+            var now = utcNow ?? DateTime.UtcNow;
+            var cutoff = now.AddDays(-ActivityLookbackDays);
+            var address = target.PrimarySmtpAddress;
+            var details = new List<ReportRow>();
+            var evidence = new List<DateTime>();
+            var anyFailed = false;
+
+            ReportRow Row(string check, string result, string status = "Read") => new()
+            {
+                ObjectName = target.Name,
+                ObjectPrimarySmtpAddress = address,
+                ObjectType = target.FriendlyType,
+                MemberOrDelegate = check,
+                RoleOrPermission = result,
+                Status = status
+            };
+
+            async Task<bool> CheckAsync(string check, string noneText, bool isMailActivity, Func<Task<DateTime?>> read)
+            {
+                _exo.OperationCancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    var date = await read();
+                    details.Add(Row(check, date.HasValue ? date.Value.ToString("yyyy-MM-dd HH:mm 'UTC'") : noneText));
+                    if (isMailActivity && date.HasValue) evidence.Add(date.Value);
+                    return true;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException && !_exo.OperationCancellationToken.IsCancellationRequested)
+                {
+                    anyFailed = true;
+                    details.Add(Row(check, string.Empty, $"Unavailable: {ex.Message}"));
+                    Logger.Log($"{check} unavailable: {ex.Message}", LogType.Warning);
+                    return false;
+                }
+            }
+
+            var hasMailbox = target.Kind == ReportTargetKind.Mailbox || target.RecipientTypeDetails == "GroupMailbox";
+            var foldersChecked = false;
+            if (hasMailbox)
+            {
+                var inbox = await CheckAsync("Newest Inbox item", "No items", true, () => _exo.GetNewestFolderItemDateAsync(address, "Inbox"));
+                var sent = await CheckAsync("Newest Sent Items item", "No items", true, () => _exo.GetNewestFolderItemDateAsync(address, "SentItems"));
+                foldersChecked = inbox && sent;
+            }
+            if (target.Kind == ReportTargetKind.Mailbox)
+            {
+                (DateTime? LastLogon, DateTime? LastUserAction) usage = default;
+                var usageRead = await CheckAsync("Last logon", "Never", false, async () => { usage = await _exo.GetMailboxUsageAsync(address); return usage.LastLogon; });
+                if (usageRead)
+                    await CheckAsync("Last user action", "None recorded", false, () => Task.FromResult(usage.LastUserAction));
+            }
+            await CheckAsync("Last message sent (trace)", "None in the last 89 days", true, () => _exo.GetNewestMessageTraceDateAsync(address, true, utcNow: now));
+            await CheckAsync("Last message received (trace)", "None in the last 89 days", true, () => _exo.GetNewestMessageTraceDateAsync(address, false, utcNow: now));
+
+            var recent = evidence.Where(date => date >= cutoff).ToList();
+            var verdict = recent.Count > 0 ? $"Active - most recent mail activity {recent.Max():yyyy-MM-dd HH:mm 'UTC'}"
+                : anyFailed ? "Unconfirmed - one or more checks were unavailable"
+                : foldersChecked ? "No mail activity found in the last 6 months"
+                : "No mail activity in the last 89 days; older activity cannot be checked for this account type";
+
+            var rows = new List<ReportRow> { Row("Verdict", verdict) };
+            rows.AddRange(details);
+            rows.Add(Row("Coverage", hasMailbox
+                ? "Inbox/Sent Items dates include subfolders; items deleted or moved elsewhere are not counted. Message trace covers 89 days."
+                : "No mailbox to inspect; only the 89-day message trace is available."));
+            return rows;
         }
 
         /// <summary>

@@ -787,8 +787,8 @@
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Text="Object" FontWeight="SemiBold" TextWrapping="Wrap" />
                                 <TextBlock Grid.Column="1" Text="Type" FontWeight="SemiBold" TextWrapping="Wrap" />
-                                <TextBlock Grid.Column="2" Text="Member / Delegate" FontWeight="SemiBold" TextWrapping="Wrap" />
-                                <TextBlock Grid.Column="3" Text="Role / Permission" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                <TextBlock Grid.Column="2" Text="Member / Delegate / Check" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                <TextBlock Grid.Column="3" Text="Role / Permission / Result" FontWeight="SemiBold" TextWrapping="Wrap" />
                                 <TextBlock Grid.Column="4" Text="Status" FontWeight="SemiBold" TextWrapping="Wrap" />
                             </Grid>
                         </Border>

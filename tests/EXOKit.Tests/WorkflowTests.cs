@@ -254,6 +254,7 @@ public sealed class WorkflowTests
     [Theory]
     [InlineData(ReportKind.GroupMembership, "SharedMailbox", "requires a group")]
     [InlineData(ReportKind.MailboxPermissions, "MailUniversalDistributionGroup", "requires a mailbox")]
+    [InlineData(ReportKind.AccountActivity, "MailContact", "requires a group or mailbox")]
     public async Task ReportingSelectionRejectsWrongTargetBeforeReadingReport(ReportKind kind, string recipientType, string expected)
     {
         using var runspace = CreateRunspace("""
@@ -272,6 +273,73 @@ public sealed class WorkflowTests
             Assert.Contains(expected, error.Message);
             await Assert.ThrowsAsync<ArgumentException>(() => service.GenerateAsync(kind, " "));
             await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => service.GenerateAsync((ReportKind)999, "target@example.org"));
+        }
+        finally { await exo.ShutdownAsync(); }
+    }
+
+    [Theory]
+    [InlineData("SharedMailbox", 10, false, "Active", false)]
+    [InlineData("SharedMailbox", 400, false, "No mail activity found in the last 6 months", false)]
+    [InlineData("SharedMailbox", -1, false, "No mail activity found in the last 6 months", false)]
+    [InlineData("SharedMailbox", 400, true, "Unconfirmed", true)]
+    [InlineData("MailUniversalDistributionGroup", 10, false, "older activity cannot be checked", false)]
+    public async Task AccountActivityReportGivesFailClosedVerdict(string targetType, int newestItemDaysAgo, bool traceFails, string expectedVerdict, bool expectWarning)
+    {
+        using var runspace = CreateRunspace("""
+            function Get-Recipient { [CmdletBinding()] param($Identity, $RecipientTypeDetails)
+                [pscustomobject]@{ Name = 'Archive'; Identity = 'archive'; PrimarySmtpAddress = 'archive@example.org'; RecipientTypeDetails = $global:TargetType }
+            }
+            function Get-EXOMailboxFolderStatistics { [CmdletBinding()] param($PrimarySmtpAddress, $FolderScope, [switch]$IncludeOldestAndNewestItems)
+                if ($global:TargetType -ne 'SharedMailbox') { throw 'Folder statistics must not run without a mailbox' }
+                [pscustomobject]@{ NewestItemReceivedDate = $global:NewestItem }
+            }
+            function Get-EXOMailboxStatistics { [CmdletBinding()] param($PrimarySmtpAddress, $Properties)
+                [pscustomobject]@{ LastLogonTime = $null; LastUserActionTime = $null }
+            }
+            function Get-MessageTraceV2 { [CmdletBinding()] param($SenderAddress, $RecipientAddress, $StartDate, $EndDate, $ResultSize)
+                if ($global:TraceFails) { throw 'Trace denied' }
+            }
+            """);
+        runspace.SessionStateProxy.SetVariable("TargetType", targetType);
+        runspace.SessionStateProxy.SetVariable("NewestItem", newestItemDaysAgo < 0 ? null : DateTime.UtcNow.AddDays(-newestItemDaysAgo));
+        runspace.SessionStateProxy.SetVariable("TraceFails", traceFails);
+        var exo = new ExoPowerShellService(runspace);
+        try
+        {
+            var report = await new ReportingService(exo).GenerateAsync(ReportKind.AccountActivity, "archive@example.org");
+            Assert.Contains(expectedVerdict, report.Rows.Single(row => row.MemberOrDelegate == "Verdict").RoleOrPermission);
+            Assert.Equal(expectWarning, report.Rows.Any(row => row.HasWarning));
+            Assert.Equal(targetType == "SharedMailbox", report.Rows.Any(row => row.MemberOrDelegate == "Newest Inbox item"));
+        }
+        finally { await exo.ShutdownAsync(); }
+    }
+
+    [Theory]
+    [InlineData(true, 5)]
+    [InlineData(false, 9)]
+    public async Task MessageTraceActivityScansTenDayWindowsAndStopsAtFirstHit(bool hit, int expectedCalls)
+    {
+        using var runspace = CreateRunspace("""
+            $global:Calls = [Collections.ArrayList]::new()
+            function Get-MessageTraceV2 { [CmdletBinding()] param($SenderAddress, $RecipientAddress, [datetime]$StartDate, [datetime]$EndDate, $ResultSize)
+                [void]$global:Calls.Add([pscustomobject]@{ Start = $StartDate; End = $EndDate })
+                $threshold = [datetime]::SpecifyKind([datetime]'2026-09-15 00:00:00', 'Utc')
+                if ($global:Hit -and $StartDate.ToUniversalTime() -le $threshold) {
+                    [pscustomobject]@{ Received = [datetime]::SpecifyKind([datetime]'2026-09-10 08:00:00', 'Utc') }
+                }
+            }
+            """);
+        runspace.SessionStateProxy.SetVariable("Hit", hit);
+        var exo = new ExoPowerShellService(runspace);
+        try
+        {
+            var now = new DateTime(2026, 11, 3, 12, 0, 0, DateTimeKind.Utc);
+            var newest = await exo.GetNewestMessageTraceDateAsync("archive@example.org", true, utcNow: now);
+            Assert.Equal(hit ? new DateTime(2026, 9, 10, 8, 0, 0) : (DateTime?)null, newest);
+            var calls = ((System.Collections.ArrayList)runspace.SessionStateProxy.GetVariable("Calls")).Cast<PSObject>().ToArray();
+            Assert.Equal(expectedCalls, calls.Length);
+            Assert.All(calls, call => Assert.True(((DateTime)call.Properties["End"].Value - (DateTime)call.Properties["Start"].Value) <= TimeSpan.FromDays(10)));
+            Assert.True((now - (DateTime)calls[^1].Properties["Start"].Value) <= TimeSpan.FromDays(90));
         }
         finally { await exo.ShutdownAsync(); }
     }
@@ -1268,6 +1336,38 @@ public sealed class WorkflowTests
             if (knownHistory) Assert.True(await service.HasSendAsAsync("mailbox", "user@example.org"));
             else await Assert.ThrowsAsync<InvalidOperationException>(() => service.HasSendAsAsync("mailbox", "user@example.org"));
         }
+        finally { await service.ShutdownAsync(); }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task SendAsSkipsStaleSidsExchangeReportsMissing(bool userHasSendAs)
+    {
+        using var runspace = CreateRunspace("""
+            function Get-Recipient {
+                [CmdletBinding()] param($Identity, $RecipientTypeDetails)
+                if ($Identity -eq 'user@example.org') {
+                    [pscustomobject]@{PrimarySmtpAddress=$Identity;RecipientTypeDetails='UserMailbox'}
+                } elseif ($Identity -like 'S-1-*') {
+                    $PSCmdlet.WriteError([Management.Automation.ErrorRecord]::new([Exception]::new("The operation couldn't be performed because object '$Identity' couldn't be found on 'server'."), 'RemoteStyleError', 'NotSpecified', $Identity))
+                }
+            }
+            function Get-User {
+                [CmdletBinding()] param($Identity)
+                [pscustomobject]@{Sid='S-1-5-21-100';SidHistory=@()}
+            }
+            function Get-RecipientPermission {
+                [CmdletBinding()] param($Identity, $ResultSize)
+                [pscustomobject]@{Trustee='S-1-5-21-99';AccessRights=[Collections.ArrayList]@('SendAs');AccessControlType='Allow'}
+                if ($global:UserHasSendAs) {
+                    [pscustomobject]@{Trustee='user@example.org';AccessRights=[Collections.ArrayList]@('SendAs');AccessControlType='Allow'}
+                }
+            }
+            """);
+        runspace.SessionStateProxy.SetVariable("UserHasSendAs", userHasSendAs);
+        var service = new ExoPowerShellService(runspace);
+        try { Assert.Equal(userHasSendAs, await service.HasSendAsAsync("mailbox", "user@example.org")); }
         finally { await service.ShutdownAsync(); }
     }
 

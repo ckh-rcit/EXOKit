@@ -160,15 +160,25 @@ the supplied script does not explicitly reject self-transfers or conflicting org
 
 ### Reporting
 
-Choose Group membership and owners or Mailbox permissions, enter the target identity, then
+Choose Group membership and owners, Mailbox permissions, or Account activity, enter the target identity, then
 select Generate report or press Enter. Target validation runs automatically and rejects an
 incompatible recipient type before reading the report. The results area shows the resolved
 target, entry count, and per-entry status. Export CSV saves the current result with its report
 type in the filename; partial reports retain their warnings.
 
+Account activity answers "is this group or shared mailbox still used?" It is read-only. Mailboxes
+(including Microsoft 365 Group mailboxes) show the newest Inbox and Sent Items dates, which include
+subfolders and are not limited to 90 days; shared mailboxes also show last logon and last user
+action. Every target type also gets the newest sent and received message from the message trace,
+scanned in 10-day windows (the per-query limit) across 89 days. The Verdict row reports Active,
+no activity in 6 months (mailboxes only), no activity in 89 days (distribution lists have no mailbox,
+so older activity cannot be checked), or Unconfirmed when any check fails. Items deleted or moved
+out of Inbox and Sent Items are not counted. Group-mailbox folder statistics and the Sent Items date
+semantics have not been verified against a live tenant.
+
 Changing the report type, target, or connected EXO tenant clears the previous result and disables
 export. Available report types and their target requirements are defined in
-`ReportingService.ReportTypes`; both types share the results and export workflow.
+`ReportingService.ReportTypes`; all types share the results and export workflow.
 
 The Log / Ticket Notes area is hidden on Settings, User Search, and Reporting. Logs continue
 to be collected. Operational pages restore its previous height and collapsed state; the divider

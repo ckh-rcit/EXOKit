@@ -285,6 +285,9 @@ namespace EXOKit.Services
             return ToRecipientInfo(results[0]);
         }
 
+        private static bool IsStaleSid(string trustee) =>
+            System.Text.RegularExpressions.Regex.IsMatch(trustee, @"^S-1-\d+(-\d+)+$");
+
         private static bool IsMissingRecipient(ErrorRecord error) =>
             error.CategoryInfo.Category == ErrorCategory.ObjectNotFound
             && error.FullyQualifiedErrorId.Contains("ManagementObjectNotFoundException", StringComparison.Ordinal);
@@ -642,7 +645,12 @@ namespace EXOKit.Services
                 if (string.Equals(trustee, "NT AUTHORITY\\SELF", StringComparison.OrdinalIgnoreCase)) continue;
                 if (trustee != null && keys.Contains(trustee)) return true;
                 if (string.IsNullOrWhiteSpace(trustee)) { unresolved.Add("<empty trustee>"); continue; }
-                var resolved = FindRecipient(trustee);
+                RecipientInfo? resolved;
+                try { resolved = FindRecipient(trustee); }
+                catch (InvalidOperationException ex) when (IsStaleSid(trustee) && ex.Message.Contains("couldn't be found", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue; // Exchange explicitly reports the SID's object is gone: stale ACE that cannot be this user.
+                }
                 if (resolved == null) { unresolved.Add(trustee); continue; }
                 if (resolved.Keys(trustee).Any(keys.Contains)) return true;
             }
@@ -1096,6 +1104,79 @@ namespace EXOKit.Services
             }
             return resolved;
         });
+
+        // --- Account activity ---
+
+        /// <summary>Newest item date across a folder scope and its subfolders (e.g. Inbox, SentItems).</summary>
+        public Task<DateTime?> GetNewestFolderItemDateAsync(string address, string folderScope) =>
+            PermissionVerification.ReadAsync(() => RunOnStaThreadAsync(() =>
+            {
+                ArgumentException.ThrowIfNullOrWhiteSpace(address);
+                ArgumentException.ThrowIfNullOrWhiteSpace(folderScope);
+                using var ps = PowerShell.Create();
+                ps.Runspace = _runspace;
+                ps.AddCommand("Get-EXOMailboxFolderStatistics").AddParameter("PrimarySmtpAddress", address)
+                  .AddParameter("FolderScope", folderScope).AddParameter("IncludeOldestAndNewestItems", true).AddParameter("ErrorAction", "Stop");
+                var folders = InvokePipeline(ps);
+                if (ps.HadErrors) throw BuildPipelineException(ps);
+                if (folders.Count == 0) throw new InvalidOperationException($"Exchange returned no {folderScope} folders; activity is unconfirmed.");
+                return folders.Select(folder => ToUtcDate(folder.Properties["NewestItemReceivedDate"]?.Value)).Max();
+            }), cancellationToken: OperationCancellationToken);
+
+        public Task<(DateTime? LastLogon, DateTime? LastUserAction)> GetMailboxUsageAsync(string address) =>
+            PermissionVerification.ReadAsync(() => RunOnStaThreadAsync(() =>
+            {
+                ArgumentException.ThrowIfNullOrWhiteSpace(address);
+                using var ps = PowerShell.Create();
+                ps.Runspace = _runspace;
+                ps.AddCommand("Get-EXOMailboxStatistics").AddParameter("PrimarySmtpAddress", address)
+                  .AddParameter("Properties", new[] { "LastLogonTime", "LastUserActionTime" }).AddParameter("ErrorAction", "Stop");
+                var rows = InvokePipeline(ps);
+                if (ps.HadErrors) throw BuildPipelineException(ps);
+                if (rows.Count != 1) throw new InvalidOperationException("Exchange did not return exactly one mailbox statistics entry; usage is unconfirmed.");
+                return (ToUtcDate(rows[0].Properties["LastLogonTime"]?.Value), ToUtcDate(rows[0].Properties["LastUserActionTime"]?.Value));
+            }), cancellationToken: OperationCancellationToken);
+
+        /// <summary>
+        /// Newest message seen in the trace for an address, scanning 10-day windows (the per-query limit)
+        /// from newest to oldest and stopping at the first window with results. Null means none in the range.
+        /// </summary>
+        public Task<DateTime?> GetNewestMessageTraceDateAsync(string address, bool asSender, int days = 89, DateTime? utcNow = null) =>
+            PermissionVerification.ReadAsync(() => RunOnStaThreadAsync(() =>
+            {
+                ArgumentException.ThrowIfNullOrWhiteSpace(address);
+                var end = utcNow ?? DateTime.UtcNow;
+                var oldest = end.AddDays(-days);
+                while (end > oldest)
+                {
+                    OperationCancellationToken.ThrowIfCancellationRequested();
+                    var start = end.AddDays(-10) < oldest ? oldest : end.AddDays(-10);
+                    using var ps = PowerShell.Create();
+                    ps.Runspace = _runspace;
+                    ps.AddCommand("Get-MessageTraceV2").AddParameter(asSender ? "SenderAddress" : "RecipientAddress", address)
+                      .AddParameter("StartDate", start).AddParameter("EndDate", end)
+                      .AddParameter("ResultSize", 1000).AddParameter("ErrorAction", "Stop");
+                    var messages = InvokePipeline(ps);
+                    if (ps.HadErrors) throw BuildPipelineException(ps);
+                    if (messages.Count > 0)
+                        return (DateTime?)messages.Max(message => ToUtcDate(message.Properties["Received"]?.Value)
+                            ?? throw new InvalidOperationException("Message trace returned an entry without a received time; activity is unconfirmed."));
+                    end = start;
+                }
+                return (DateTime?)null;
+            }), cancellationToken: OperationCancellationToken);
+
+        private static DateTime? ToUtcDate(object? value)
+        {
+            if (value is PSObject wrapped) value = wrapped.BaseObject;
+            return value switch
+            {
+                null => null,
+                DateTime date => date.Kind == DateTimeKind.Unspecified ? DateTime.SpecifyKind(date, DateTimeKind.Utc) : date.ToUniversalTime(),
+                DateTimeOffset offset => offset.UtcDateTime,
+                _ => throw new InvalidOperationException("Exchange returned an unreadable date; activity is unconfirmed.")
+            };
+        }
 
         // --- Shared Mailbox Creation ---
 
