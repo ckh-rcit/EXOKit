@@ -127,11 +127,16 @@ namespace EXOKit
                 Logger.Log($"Configuration could not be loaded: {configError}. Correct and save Settings; the original file is preserved as config.json.bak on save.", LogType.Error);
                 MainNavigationView.SelectedItem = NavItemSettings;
             }
-            Closed += async (_, _) =>
+            Closed += (_, _) =>
             {
                 Logger.LogEntryWritten -= OnLogEntryWritten;
-                try { await _exo.ShutdownAsync(); }
-                catch (Exception exception) { Logger.Log($"Session shutdown: {exception.Message}", LogType.Warning); }
+                // A lingering windowless process makes the next Start-menu launch show nothing, so always end the process.
+                _ = Task.Run(async () =>
+                {
+                    try { await _exo.ShutdownAsync().WaitAsync(TimeSpan.FromSeconds(10)); }
+                    catch (Exception exception) { Logger.Log($"Session shutdown: {exception.Message}", LogType.Warning); }
+                    Environment.Exit(0);
+                });
             };
 
             UpdateConnectionStatus();

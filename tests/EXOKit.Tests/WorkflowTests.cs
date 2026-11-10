@@ -654,6 +654,7 @@ public sealed class WorkflowTests
                 element => element.Elements().Select(brush => (string?)brush.Attribute(x + "Key")).OfType<string>().ToHashSet());
         // Windows resolves a missing Light theme through Default; the dark shell must never fail on a light-mode PC.
         Assert.True(themes.ContainsKey("Default") || themes.ContainsKey("Light"), "No theme dictionary serves light-mode Windows.");
+        Assert.Equal("Dark", (string?)document.Root!.Attribute("RequestedTheme"));
         var shellBrushes = themes.Values.SelectMany(keys => keys).Where(key => key.StartsWith("Shell", StringComparison.Ordinal)).ToHashSet();
         Assert.NotEmpty(shellBrushes);
         foreach (var theme in new[] { "Default", "Dark", "HighContrast" })
