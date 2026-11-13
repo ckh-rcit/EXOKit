@@ -28,7 +28,17 @@ namespace EXOKit.Services
             state.ExecutionPolicy = Microsoft.PowerShell.ExecutionPolicy.RemoteSigned;
             state.Formats.Clear();
             state.Types.Clear();
+            // Clearing Types drops BaseName on file objects, which PowerShellGet 2.2.6+ reads while importing.
+            state.Types.Add(new System.Management.Automation.Runspaces.SessionStateTypeEntry(BaseNameTypeData(typeof(System.IO.FileInfo), "[System.IO.Path]::GetFileNameWithoutExtension($this.Name)"), false));
+            state.Types.Add(new System.Management.Automation.Runspaces.SessionStateTypeEntry(BaseNameTypeData(typeof(System.IO.DirectoryInfo), "$this.Name"), false));
             return state;
+        }
+
+        private static System.Management.Automation.Runspaces.TypeData BaseNameTypeData(Type type, string getter)
+        {
+            var data = new System.Management.Automation.Runspaces.TypeData(type);
+            data.Members.Add("BaseName", new System.Management.Automation.Runspaces.ScriptPropertyData("BaseName", ScriptBlock.Create(getter)));
+            return data;
         }
 
         public override CultureInfo CurrentCulture => CultureInfo.CurrentCulture;
