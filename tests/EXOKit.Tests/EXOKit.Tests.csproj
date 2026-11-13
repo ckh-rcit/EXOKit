@@ -19,7 +19,7 @@
     <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />
     <PackageReference Include="System.Security.Cryptography.Xml" Version="10.0.13" />
     <PackageReference Include="Microsoft.Graph" Version="6.6.0" />
-    <PackageReference Include="Microsoft.Identity.Client" Version="4.89.0" />
+    <PackageReference Include="Microsoft.Identity.Client" Version="4.92.0" />
     <Compile Include="..\..\Services\GraphService.cs" Link="Services\GraphService.cs" />
     <Compile Include="..\..\Services\UserSearch.cs" Link="Services\UserSearch.cs" />
     <Compile Include="..\..\Services\AuthService.cs" Link="Services\AuthService.cs" />
